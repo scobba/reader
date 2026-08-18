@@ -242,3 +242,21 @@ With that in place the practical floor is:
 
 Anything older will load the app but fail on import with a message rather than
 working silently badly.
+
+## If the worker is unusable
+
+PDF parsing runs in a module worker so a long document does not freeze the
+interface. That worker is also the most fragile thing the app depends on:
+WebKit has a history of breaking module workers spawned from a page that a
+service worker controls, and when it breaks it breaks for every document, so
+the app simply looks broken.
+
+`js/extract/pdf.js` therefore treats the worker as best-effort. pdf.js already
+recovers by itself when `new Worker()` throws, but the failure it cannot see is
+a worker that constructs successfully and then never replies — a hang rather
+than an error. So opening a document races a deadline (12 s on first use), and
+on timeout the same pdf.js bundle is run on the main thread instead. The
+outcome is remembered, so only the first import pays for the discovery.
+
+The result is slower on large files and blocks the interface while it parses,
+but it works. Settings › Show diagnostics reports which path was taken.

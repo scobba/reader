@@ -12,6 +12,101 @@ async function lib() {
   return _lib;
 }
 
+/* Worker strategy.
+ *
+ * Parsing belongs in a worker: it keeps a 300-page book from freezing the UI.
+ * But module workers are the most fragile thing this app depends on, and when
+ * they fail they fail on every document rather than one — which is exactly
+ * what a reader experiences as "the app is broken".
+ *
+ * So the worker is attempted first and, if the document cannot be opened, the
+ * same bundle is run on the main thread instead via pdf.js's documented fake
+ * worker. That is slower on large files and blocks the UI while it runs, but
+ * it works, and working slowly beats not working.
+ *
+ * The outcome is remembered: once the worker has been shown to be unusable,
+ * later imports go straight to the main thread rather than paying for the
+ * failure every time.
+ */
+let workerMode = 'untried';   // 'untried' | 'worker' | 'main'
+
+export const pdfWorkerMode = () => workerMode;
+
+function baseParams(data, extra) {
+  return {
+    // pdf.js takes ownership of the buffer and detaches it, so every attempt
+    // hands over its own copy and the caller's original stays usable.
+    data: data.slice(0),
+    standardFontDataUrl: PDFJS.fonts,
+    useSystemFonts: true,
+    isEvalSupported: false,
+    // Journal PDFs are frequently linearised oddly; be forgiving.
+    stopAtErrors: false,
+    ...extra,
+  };
+}
+
+/** @returns {Promise<{doc:Object, task:Object, mode:string}>} */
+async function loadDocument(data, extra) {
+  const pdfjs = await lib();
+
+  if (workerMode !== 'main') {
+    let task = null;
+    let timer = null;
+    try {
+      task = pdfjs.getDocument(baseParams(data, extra));
+
+      // pdf.js recovers on its own when `new Worker()` throws. The case it
+      // cannot see is a worker that constructs successfully and then never
+      // answers — which is what a WebKit page under a service worker can do
+      // to a module worker. That presents as a hang rather than an error, so
+      // opening always races a deadline. Opening only reads the header and
+      // cross-reference table, so even a proven-good worker should be quick;
+      // the allowance is simply more generous once it has worked before.
+      const limit = workerMode === 'untried' ? 12000 : 45000;
+      const deadline = new Promise((_, rej) => {
+        timer = setTimeout(() => {
+          const e = new Error(`Worker did not respond within ${limit / 1000}s`);
+          e.isWorkerTimeout = true;
+          rej(e);
+        }, limit);
+      });
+
+      const doc = await Promise.race([task.promise, deadline]);
+
+      workerMode = 'worker';
+      globalThis.__pdfWorkerMode = 'worker';
+      return { doc, task, mode: 'worker' };
+    } catch (err) {
+      // A hang is never the document's fault, so it always earns a retry on
+      // the main thread. Any other failure from a worker that has already
+      // parsed something is a genuine problem with this file, and masking it
+      // behind a slow second attempt would only hide the real error.
+      if (!err?.isWorkerTimeout && workerMode === 'worker') throw err;
+      task?.destroy().catch(() => {});
+      globalThis.__diag?.record('pdf-worker-fallback', err, 'worker unusable, retrying on main thread');
+      console.warn('[pdf] worker unusable, falling back to the main thread:', err?.message);
+    } finally {
+      clearTimeout(timer);
+    }
+  }
+
+  // pdf.js selects its fake worker when the Worker constructor is absent.
+  // Hiding it for the duration of the load is the only supported way in to
+  // that path; nothing else in this app constructs a Worker concurrently.
+  const RealWorker = globalThis.Worker;
+  try {
+    globalThis.Worker = undefined;
+    const task = pdfjs.getDocument(baseParams(data, extra));
+    const doc = await task.promise;
+    workerMode = 'main';
+    globalThis.__pdfWorkerMode = 'main (worker unusable)';
+    return { doc, task, mode: 'main' };
+  } finally {
+    globalThis.Worker = RealWorker;
+  }
+}
+
 /** pdf.js hands us an opaque font id; the real name, when it is available,
  *  is the only signal we get for weight and slant. */
 function fontTraits(pdfjs, page, styles, fontName) {
@@ -44,19 +139,9 @@ function fontTraits(pdfjs, page, styles, fontName) {
 export async function extractPdf(data, { onProgress, signal } = {}) {
   const pdfjs = await lib();
 
-  const task = pdfjs.getDocument({
-    // pdf.js takes ownership of the buffer and detaches it, so every entry
-    // point hands over its own copy. Callers keep reusing the original.
-    data: data.slice(0),
-    standardFontDataUrl: PDFJS.fonts,
-    useSystemFonts: true,
-    isEvalSupported: false,
-    // Journal PDFs are frequently linearised oddly; be forgiving.
-    stopAtErrors: false,
-  });
+  const { doc, task, mode } = await loadDocument(data);
   signal?.addEventListener('abort', () => task.destroy().catch(() => {}), { once: true });
 
-  const doc = await task.promise;
   const pageCount = doc.numPages;
 
   let allLines = [];
@@ -123,6 +208,7 @@ export async function extractPdf(data, { onProgress, signal } = {}) {
 
     const meta = await readMeta(doc, blocks);
     meta.pages = pageCount;
+    meta.workerMode = mode;
 
     return {
       blocks,
@@ -175,14 +261,7 @@ async function readMeta(doc, blocks) {
  *  reopening the file per page would re-parse the whole xref each time.
  *  @returns {Promise<{doc:Object, close:()=>void}>} */
 export async function openPdf(data) {
-  const pdfjs = await lib();
-  const task = pdfjs.getDocument({
-    data: data.slice(0),
-    standardFontDataUrl: PDFJS.fonts,
-    useSystemFonts: true,
-    isEvalSupported: false,
-  });
-  const doc = await task.promise;
+  const { doc, task } = await loadDocument(data);
   return { doc, close: () => task.destroy().catch(() => {}) };
 }
 

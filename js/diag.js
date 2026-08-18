@@ -99,6 +99,8 @@
       lines.push('sw        ' + (navigator.serviceWorker && navigator.serviceWorker.controller
                                   ? 'controlling' : 'not controlling'));
       lines.push('');
+      lines.push('pdf worker  ' + (window.__pdfWorkerMode || 'not yet used'));
+      lines.push('');
       lines.push('features');
       var f = features();
       Object.keys(f).forEach(function (k) {
