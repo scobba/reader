@@ -17,6 +17,7 @@ export function initDialogs({ refreshLibrary, openDoc, getCurrent, rebuildScript
   wireImport();
   wireSettings();
   wireDocMenu();
+  wireDiag();
 
   return {
     openImport: () => { dlgImport.showModal(); },
@@ -267,6 +268,42 @@ export function initDialogs({ refreshLibrary, openDoc, getCurrent, rebuildScript
       : 'Not reported';
   }
 
+  /* ════════════════════════════════════════════════ diagnostics ══ */
+
+  function wireDiag() {
+    const dlg = document.getElementById('dlg-diag');
+    const box = document.getElementById('diag-text');
+
+    const open = () => {
+      box.value = globalThis.__diag ? globalThis.__diag.report() : 'Diagnostics unavailable.';
+      dlgSettings.close();
+      dlg.showModal();
+    };
+    openDiag = open;
+
+    document.getElementById('btn-diag').onclick = open;
+
+    document.getElementById('btn-diag-copy').onclick = async () => {
+      try {
+        await navigator.clipboard.writeText(box.value);
+        toast('Copied');
+      } catch {
+        // Safari refuses the async clipboard in some contexts; selecting the
+        // text and using the legacy call still works from a tap.
+        box.focus();
+        box.setSelectionRange(0, box.value.length);
+        const ok = document.execCommand && document.execCommand('copy');
+        toast(ok ? 'Copied' : 'Select the text above and copy it manually', { error: !ok });
+      }
+    };
+
+    document.getElementById('btn-diag-clear').onclick = () => {
+      globalThis.__diag?.clear();
+      box.value = globalThis.__diag ? globalThis.__diag.report() : '';
+      toast('Cleared');
+    };
+  }
+
   /* ════════════════════════════════════════════════ document menu ═ */
 
   function wireDocMenu() {
@@ -403,8 +440,27 @@ function check(id, on) { document.getElementById(id).checked = !!on; }
 
 const trim = (s, n) => (s && s.length > n ? s.slice(0, n - 1) + '…' : s || '');
 
+let openDiag = null;
+
 function fail(e, prefix = '') {
   if (e?.name === 'AbortError') { toast('Cancelled'); return; }
   console.error(e);
+
+  // Always capture the real error object. A caught exception never reaches
+  // window.onerror, and on iOS this is the only way to see a stack at all.
+  globalThis.__diag?.record('caught', e, prefix || 'import');
+
+  // A TypeError or ReferenceError here is a bug in the app, not something the
+  // reader did wrong, and its message ("undefined is not a function") is
+  // useless on its own. Send those straight to the diagnostics sheet.
+  const isBug = e instanceof TypeError || e instanceof ReferenceError ||
+                /is not a function|undefined is not|null is not|cannot read/i.test(e?.message || '');
+
+  if (isBug && openDiag) {
+    toast('Something went wrong — opening diagnostics', { error: true, ms: 4000 });
+    setTimeout(() => openDiag(), 350);
+    return;
+  }
+
   toast(prefix + (e?.message || 'Something went wrong'), { error: true, ms: 6000 });
 }

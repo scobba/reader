@@ -570,3 +570,22 @@ body[data-playing] .play-btn .i-pause { display: block; }
 @keyframes spin { to { transform: rotate(360deg); } }
 
 #audio-out { display: none; }
+
+/* Diagnostics: monospaced and selectable, so a device with no console can
+   still hand over a real stack trace. */
+.diag-box {
+  width: 100%;
+  padding: 11px 12px;
+  border: 1px solid var(--line);
+  border-radius: 11px;
+  background: var(--bg);
+  color: var(--text);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 11.5px;
+  line-height: 1.45;
+  white-space: pre;
+  overflow: auto;
+  resize: vertical;
+  -webkit-user-select: text;
+  user-select: text;
+}

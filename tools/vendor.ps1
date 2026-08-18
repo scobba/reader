@@ -63,11 +63,11 @@ $okPdf2 = Get-Dep "$pdfBase/build/pdf.worker.min.mjs" 'pdfjs/pdf.worker.min.mjs'
 # matters for the OCR fallback path, since that rasterises pages).
 $stdFonts = @(
     'FoxitDingbats.pfb','FoxitFixed.pfb','FoxitFixedBold.pfb','FoxitFixedBoldItalic.pfb',
-    'FoxitFixedItalic.pfb','FoxitSans.pfb','FoxitSansBold.pfb','FoxitSansBoldItalic.pfb',
-    'FoxitSansItalic.pfb','FoxitSerif.pfb','FoxitSerifBold.pfb','FoxitSerifBoldItalic.pfb',
+    'FoxitFixedItalic.pfb','FoxitSerif.pfb','FoxitSerifBold.pfb','FoxitSerifBoldItalic.pfb',
     'FoxitSerifItalic.pfb','FoxitSymbol.pfb',
     'LiberationSans-Bold.ttf','LiberationSans-BoldItalic.ttf',
-    'LiberationSans-Italic.ttf','LiberationSans-Regular.ttf'
+    'LiberationSans-Italic.ttf','LiberationSans-Regular.ttf',
+    'LICENSE_FOXIT','LICENSE_LIBERATION'
 )
 foreach ($f in $stdFonts) {
     Get-Dep "$pdfBase/standard_fonts/$f" "pdfjs/standard_fonts/$f" -Optional | Out-Null

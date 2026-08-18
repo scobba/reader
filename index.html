@@ -239,6 +239,7 @@
 
     <h3>About</h3>
     <p class="hint" id="about-text"></p>
+    <button class="btn block" id="btn-diag">Show diagnostics</button>
   </div>
 </dialog>
 
@@ -271,6 +272,23 @@
 </dialog>
 
 <!-- ══════════════════════════════════════════════════ Progress ═════════ -->
+<!-- ══════════════════════════════════════════════════ Diagnostics ═════ -->
+<dialog class="sheet" id="dlg-diag">
+  <form method="dialog" class="sheet-head">
+    <h2>Diagnostics</h2>
+    <button class="icon-btn" value="cancel" aria-label="Close">
+      <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"/></svg>
+    </button>
+  </form>
+  <div class="tabpanel">
+    <p class="hint">This describes your device and any errors the app has hit. Nothing here is sent
+      anywhere &mdash; tap Copy and paste it wherever you need it.</p>
+    <textarea id="diag-text" class="diag-box" readonly rows="14" spellcheck="false"></textarea>
+    <button class="btn primary block" id="btn-diag-copy">Copy to clipboard</button>
+    <button class="btn block" id="btn-diag-clear">Clear recorded errors</button>
+  </div>
+</dialog>
+
 <div class="toast-host" id="toast-host" aria-live="polite"></div>
 
 <div class="busy" id="busy" hidden>
@@ -286,6 +304,7 @@
 <audio id="audio-out" playsinline></audio>
 
 <script src="js/compat.js"></script>
+<script src="js/diag.js"></script>
 <script type="module" src="js/main.js"></script>
 </body>
 </html>
