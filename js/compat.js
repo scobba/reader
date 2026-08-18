@@ -21,6 +21,57 @@
     };
   }
 
+  /* Async iteration over a ReadableStream — `for await (const chunk of stream)`.
+   *
+   * Chrome and Firefox ship it; WebKit does not, and that single gap is what
+   * stops this app reading a PDF on an iPhone. pdf.js streams text content out
+   * of the worker and consumes it with exactly that loop, so without this the
+   * very first getTextContent() throws and no document can ever be read.
+   *
+   * Implemented per the Streams standard's ReadableStreamAsyncIteratorPrototype:
+   * next() delegates to a reader, and return() cancels unless preventCancel. */
+  if (typeof ReadableStream !== 'undefined' &&
+      typeof Symbol !== 'undefined' && Symbol.asyncIterator &&
+      !ReadableStream.prototype[Symbol.asyncIterator]) {
+
+    const values = function values(options) {
+      const preventCancel = !!(options && options.preventCancel);
+      const reader = this.getReader();
+      return {
+        next: function () {
+          return reader.read().then(function (result) {
+            if (result.done) reader.releaseLock();
+            return result;
+          }, function (err) {
+            reader.releaseLock();
+            throw err;
+          });
+        },
+        return: function (value) {
+          if (preventCancel) {
+            reader.releaseLock();
+            return Promise.resolve({ done: true, value: value });
+          }
+          return reader.cancel(value).then(function () {
+            reader.releaseLock();
+            return { done: true, value: value };
+          });
+        },
+        throw: function (err) {
+          reader.releaseLock();
+          return Promise.reject(err);
+        },
+        [Symbol.asyncIterator]: function () { return this; },
+      };
+    };
+
+    const def = { value: values, writable: true, configurable: true };
+    Object.defineProperty(ReadableStream.prototype, Symbol.asyncIterator, def);
+    if (!ReadableStream.prototype.values) {
+      Object.defineProperty(ReadableStream.prototype, 'values', def);
+    }
+  }
+
   const AP = Array.prototype;
 
   if (!AP.findLast) {

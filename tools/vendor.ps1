@@ -134,14 +134,22 @@ function Add-Compat {
     $full = Join-Path $vendor $Relative
     if (-not (Test-Path $full)) { return }
 
-    $text = [IO.File]::ReadAllText($full)
-    if ($text.StartsWith('/*mr-compat*/')) {
-        Write-Host ("  shim  {0}  (already patched)" -f $Relative) -ForegroundColor DarkGray
-        return
-    }
+    # Two gaps break pdf.js on WebKit:
+    #   Promise.withResolvers      - absent before Safari 17.4
+    #   ReadableStream async iter. - still absent; pdf.js consumes its text
+    #                                stream with `for await (... of stream)`,
+    #                                so getTextContent throws without it.
+    # The worker bundle runs in its own realm and cannot see the page polyfill,
+    # so the shim goes into both bundles.
+    $shim = '/*mr-compat*/if(typeof Promise!=="undefined"&&!Promise.withResolvers){Promise.withResolvers=function(){let a,b;const p=new Promise((x,y)=>{a=x;b=y});return{promise:p,resolve:a,reject:b}}}if(typeof ReadableStream!=="undefined"&&Symbol.asyncIterator&&!ReadableStream.prototype[Symbol.asyncIterator]){const v=function(o){const pc=!!(o&&o.preventCancel);const r=this.getReader();return{next(){return r.read().then(x=>{if(x.done)r.releaseLock();return x},e=>{r.releaseLock();throw e})},return(x){if(pc){r.releaseLock();return Promise.resolve({done:true,value:x})}return r.cancel(x).then(()=>{r.releaseLock();return{done:true,value:x}})},throw(e){r.releaseLock();return Promise.reject(e)},[Symbol.asyncIterator](){return this}}};const d={value:v,writable:true,configurable:true};Object.defineProperty(ReadableStream.prototype,Symbol.asyncIterator,d);if(!ReadableStream.prototype.values){Object.defineProperty(ReadableStream.prototype,"values",d)}}'
 
-    $shim = '/*mr-compat*/if(typeof Promise!=="undefined"&&!Promise.withResolvers){Promise.withResolvers=function(){let a,b;const p=new Promise((x,y)=>{a=x;b=y});return{promise:p,resolve:a,reject:b}}}'
-    [IO.File]::WriteAllText($full, $shim + [Environment]::NewLine + $text, (New-Object Text.UTF8Encoding($false)))
+    $lines = [IO.File]::ReadAllText($full)
+    # Drop any previous shim so re-running always installs the current one.
+    if ($lines.StartsWith('/*mr-compat*/')) {
+        $nl = $lines.IndexOf("`n")
+        $lines = $lines.Substring($nl + 1)
+    }
+    [IO.File]::WriteAllText($full, $shim + [Environment]::NewLine + $lines, (New-Object Text.UTF8Encoding($false)))
     Write-Host ("  shim  {0}" -f $Relative) -ForegroundColor Green
 }
 

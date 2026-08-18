@@ -226,22 +226,27 @@ powershell -ExecutionPolicy Bypass -File tools\vendor.ps1 -Force
 
 ## Browser requirements
 
-The vendored pdf.js calls `Promise.withResolvers`, which only reached Safari in
-17.4. `tools/vendor.ps1` injects a small polyfill into both pdf.js bundles —
-including the worker one, which runs in its own realm and cannot see a
-polyfill loaded by the page — so older devices work too. Re-running the
-vendor script reapplies it automatically.
+The vendored pdf.js depends on two things WebKit does not provide, and both are
+patched into the bundles by `toolsvendor.ps1` (re-running it reapplies them):
 
-With that in place the practical floor is:
+1. **`Promise.withResolvers`** — absent before Safari 17.4.
+2. **Async iteration over a `ReadableStream`** — that is, `for await (const
+   chunk of stream)`. Chrome and Firefox ship it; **Safari still does not, at
+   any version**. pdf.js streams text out of its worker and consumes it with
+   exactly that loop, so without this polyfill `getTextContent()` throws
+   "undefined is not a function" and no PDF can be read on an iPhone at all.
+
+The worker bundle runs in its own realm and cannot see a polyfill loaded by the
+page, so the shim is injected into both `pdf.min.mjs` and `pdf.worker.min.mjs`
+rather than shipped only as `js/compat.js`.
+
+With those in place the practical floor is:
 
 | | Minimum |
 |---|---|
 | PDF, HTML, text, speech | iOS 15.4 / Safari 15.4 |
 | EPUB and DOCX (needs `DecompressionStream`) | iOS 16.4 |
 | Keep-screen-awake (Wake Lock) | iOS 16.4 |
-
-Anything older will load the app but fail on import with a message rather than
-working silently badly.
 
 ## If the worker is unusable
 
