@@ -1,0 +1,290 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, maximum-scale=1">
+<title>Mobile Reader</title>
+<meta name="description" content="Reads PDFs, journal articles and documents aloud, offline.">
+
+<link rel="manifest" href="manifest.webmanifest">
+<meta name="theme-color" content="#101418">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="Reader">
+<link rel="apple-touch-icon" href="icons/icon-180.png">
+<link rel="icon" href="icons/icon.svg" type="image/svg+xml">
+
+<link rel="stylesheet" href="css/app.css">
+</head>
+<body>
+
+<!-- ══════════════════════════════════════════════════ Library ══════════ -->
+<section class="view" id="view-library" data-active>
+  <header class="topbar">
+    <h1>Library</h1>
+    <div class="spacer"></div>
+    <button class="icon-btn" id="btn-settings" aria-label="Settings">
+      <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 15.5A3.5 3.5 0 1 1 12 8.5a3.5 3.5 0 0 1 0 7z"/><path d="M19.4 13a7.6 7.6 0 0 0 0-2l2-1.6-2-3.4-2.4 1a7.6 7.6 0 0 0-1.7-1L14.9 3H9.1l-.4 2.6a7.6 7.6 0 0 0-1.7 1l-2.4-1-2 3.4L2.6 11a7.6 7.6 0 0 0 0 2l-2 1.6 2 3.4 2.4-1c.5.4 1.1.8 1.7 1l.4 2.6h5.8l.4-2.6c.6-.2 1.2-.6 1.7-1l2.4 1 2-3.4z"/></svg>
+    </button>
+  </header>
+
+  <div class="scroll" id="library-scroll">
+    <div class="empty" id="library-empty" hidden>
+      <div class="empty-art" aria-hidden="true">
+        <svg viewBox="0 0 24 24"><path d="M4 4h9l3 3h4v13H4z"/></svg>
+      </div>
+      <h2>Nothing to read yet</h2>
+      <p>Add a PDF, a journal article, an EPUB, a Word file, a web page or pasted text. Everything stays on this device.</p>
+      <button class="btn primary" data-action="import">Add a document</button>
+    </div>
+    <ul class="doc-list" id="doc-list"></ul>
+    <div class="list-pad"></div>
+  </div>
+
+  <button class="fab" id="btn-import" aria-label="Add a document">
+    <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg>
+  </button>
+</section>
+
+<!-- ══════════════════════════════════════════════════ Reader ═══════════ -->
+<section class="view" id="view-reader">
+  <header class="topbar">
+    <button class="icon-btn" id="btn-back" aria-label="Back to library">
+      <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M15 19l-7-7 7-7"/></svg>
+    </button>
+    <h1 id="reader-title">Document</h1>
+    <div class="spacer"></div>
+    <button class="icon-btn" id="btn-doc-menu" aria-label="Document options">
+      <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="5" r="1.6"/><circle cx="12" cy="12" r="1.6"/><circle cx="12" cy="19" r="1.6"/></svg>
+    </button>
+  </header>
+
+  <div class="scroll" id="reader-scroll">
+    <article id="reader-body"></article>
+    <div class="reader-pad"></div>
+  </div>
+
+  <div class="transport" id="transport">
+    <input class="seek" id="seek" type="range" min="0" max="100" value="0" step="1" aria-label="Position in document">
+    <div class="transport-meta">
+      <span id="pos-label">—</span>
+      <span id="time-label">—</span>
+    </div>
+    <div class="transport-controls">
+      <button class="icon-btn wide" id="btn-prev-section" aria-label="Previous section">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M18 5v14M8 12l8-7v14z"/></svg>
+      </button>
+      <button class="icon-btn wide" id="btn-prev" aria-label="Previous sentence">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M11 12l8-7v14zM4 5v14"/></svg>
+      </button>
+      <button class="play-btn" id="btn-play" aria-label="Play">
+        <svg class="i-play" viewBox="0 0 24 24" aria-hidden="true"><path d="M7 4l13 8-13 8z"/></svg>
+        <svg class="i-pause" viewBox="0 0 24 24" aria-hidden="true"><path d="M7 4h4v16H7zM13 4h4v16h-4z"/></svg>
+      </button>
+      <button class="icon-btn wide" id="btn-next" aria-label="Next sentence">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M13 12L5 5v14zM20 5v14"/></svg>
+      </button>
+      <button class="icon-btn wide" id="btn-rate" aria-label="Playback speed"><span id="rate-label">1.0×</span></button>
+    </div>
+  </div>
+</section>
+
+<!-- ══════════════════════════════════════════════════ Import ═══════════ -->
+<dialog class="sheet" id="dlg-import">
+  <form method="dialog" class="sheet-head">
+    <h2>Add a document</h2>
+    <button class="icon-btn" value="cancel" aria-label="Close">
+      <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"/></svg>
+    </button>
+  </form>
+
+  <div class="tabs" role="tablist">
+    <button role="tab" data-tab="file" aria-selected="true">File</button>
+    <button role="tab" data-tab="url">Web page</button>
+    <button role="tab" data-tab="text">Paste</button>
+  </div>
+
+  <div class="tabpanel" data-panel="file">
+    <label class="dropzone" id="dropzone">
+      <input type="file" id="file-input" multiple
+             accept=".pdf,.html,.htm,.xhtml,.epub,.docx,.txt,.md,.markdown,.rtf,application/pdf,text/html,text/plain,application/epub+zip,application/vnd.openxmlformats-officedocument.wordprocessingml.document">
+      <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 16V4M8 8l4-4 4 4M4 16v2a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-2"/></svg>
+      <strong>Choose files</strong>
+      <span>PDF · EPUB · DOCX · HTML · TXT · Markdown</span>
+    </label>
+    <p class="hint">On iPhone, tap <em>Browse</em> to pick anything you have saved in Files, including PDFs shared from Safari or a journal app.</p>
+  </div>
+
+  <div class="tabpanel" data-panel="url" hidden>
+    <label class="field">
+      <span>Article URL</span>
+      <input type="url" id="url-input" placeholder="https://pubmed.ncbi.nlm.nih.gov/…" inputmode="url" autocapitalize="off" spellcheck="false">
+    </label>
+    <button class="btn primary block" id="btn-fetch-url">Fetch and add</button>
+    <p class="hint">Many publishers block direct fetching from a browser. If a URL fails, open it in Safari, <em>Select All → Copy</em>, and use the Paste tab instead — that always works.</p>
+  </div>
+
+  <div class="tabpanel" data-panel="text" hidden>
+    <label class="field">
+      <span>Title</span>
+      <input type="text" id="paste-title" placeholder="Optional">
+    </label>
+    <label class="field">
+      <span>Text or HTML</span>
+      <textarea id="paste-body" rows="9" placeholder="Paste the article here…"></textarea>
+    </label>
+    <button class="btn primary block" id="btn-add-paste">Add</button>
+  </div>
+</dialog>
+
+<!-- ══════════════════════════════════════════════════ Settings ═════════ -->
+<dialog class="sheet" id="dlg-settings">
+  <form method="dialog" class="sheet-head">
+    <h2>Settings</h2>
+    <button class="icon-btn" value="cancel" aria-label="Close">
+      <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"/></svg>
+    </button>
+  </form>
+
+  <div class="settings-scroll">
+    <h3>Voice</h3>
+    <label class="field">
+      <span>Engine</span>
+      <select id="set-engine"></select>
+    </label>
+    <p class="hint" id="engine-hint"></p>
+
+    <label class="field">
+      <span>Voice</span>
+      <select id="set-voice"></select>
+    </label>
+    <p class="hint">Voices marked <em>sends text online</em> are synthesised on the vendor’s servers, so the
+      text of each sentence leaves your device. Every other voice runs entirely on your phone. Apple’s
+      voices, including the Enhanced and Premium downloads, are all on-device.</p>
+
+    <label class="field">
+      <span>Speed <b id="set-rate-val">1.0×</b></span>
+      <input type="range" id="set-rate" min="0.5" max="3" step="0.05" value="1">
+    </label>
+
+    <label class="field">
+      <span>Pitch <b id="set-pitch-val">1.0</b></span>
+      <input type="range" id="set-pitch" min="0.5" max="1.5" step="0.05" value="1">
+    </label>
+
+    <label class="field">
+      <span>Pause between sentences <b id="set-gap-val">0 ms</b></span>
+      <input type="range" id="set-gap" min="0" max="1200" step="50" value="0">
+    </label>
+
+    <h3>What to read</h3>
+    <label class="switch">
+      <input type="checkbox" id="set-skip-citations" checked>
+      <span><b>Skip inline citations</b><small>Drops “[12]” and “(Smith et al., 2019)”. Leaves statistics like “(p = 0.03)” and “(95% CI 1.2–3.4)” intact.</small></span>
+    </label>
+    <label class="switch">
+      <input type="checkbox" id="set-skip-refs" checked>
+      <span><b>Skip the reference list</b><small>Stops before References, Bibliography and other back matter.</small></span>
+    </label>
+    <label class="switch">
+      <input type="checkbox" id="set-skip-captions">
+      <span><b>Skip figure and table captions</b><small>They interrupt the flow of the body text.</small></span>
+    </label>
+    <label class="switch">
+      <input type="checkbox" id="set-expand-abbrev" checked>
+      <span><b>Speak abbreviations in full</b><small>“mg/dL” becomes “milligrams per deciliter”, “95% CI” becomes “95 percent confidence interval”. The text on screen is unchanged.</small></span>
+    </label>
+    <label class="switch">
+      <input type="checkbox" id="set-announce-headings" checked>
+      <span><b>Announce section headings</b><small>Adds a short pause before each heading.</small></span>
+    </label>
+
+    <h3>Playback</h3>
+    <label class="switch">
+      <input type="checkbox" id="set-keep-awake" checked>
+      <span><b>Keep the screen awake</b><small>Prevents the display sleeping mid-article. Ignored on browsers without Wake Lock.</small></span>
+    </label>
+    <label class="switch">
+      <input type="checkbox" id="set-autoscroll" checked>
+      <span><b>Follow along</b><small>Scrolls the text to keep the current sentence in view.</small></span>
+    </label>
+    <label class="field">
+      <span>Sleep timer</span>
+      <select id="set-sleep">
+        <option value="0">Off</option>
+        <option value="300">5 minutes</option>
+        <option value="900">15 minutes</option>
+        <option value="1800">30 minutes</option>
+        <option value="3600">1 hour</option>
+        <option value="-1">End of section</option>
+      </select>
+    </label>
+
+    <h3>Reading</h3>
+    <label class="field">
+      <span>Text size <b id="set-fs-val">18px</b></span>
+      <input type="range" id="set-fontsize" min="14" max="30" step="1" value="18">
+    </label>
+    <label class="switch">
+      <input type="checkbox" id="set-dyslexic">
+      <span><b>High-legibility spacing</b><small>Wider letter and line spacing.</small></span>
+    </label>
+
+    <h3>Storage</h3>
+    <div class="storage-row"><span>Documents</span><b id="stat-docs">—</b></div>
+    <div class="storage-row"><span>Cached audio</span><b id="stat-audio">—</b></div>
+    <div class="storage-row"><span>Estimated usage</span><b id="stat-quota">—</b></div>
+    <button class="btn block" id="btn-clear-audio">Clear cached audio</button>
+    <button class="btn block danger" id="btn-clear-all">Delete everything</button>
+
+    <h3>About</h3>
+    <p class="hint" id="about-text"></p>
+  </div>
+</dialog>
+
+<!-- ══════════════════════════════════════════════════ Doc menu ═════════ -->
+<dialog class="sheet compact" id="dlg-docmenu">
+  <form method="dialog" class="sheet-head">
+    <h2 id="docmenu-title">Document</h2>
+    <button class="icon-btn" value="cancel" aria-label="Close">
+      <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"/></svg>
+    </button>
+  </form>
+  <div class="menu-list">
+    <button class="menu-item" id="mi-outline"><b>Jump to section</b><small>Navigate by heading</small></button>
+    <button class="menu-item" id="mi-restart"><b>Start from the beginning</b><small>Reset the saved position</small></button>
+    <button class="menu-item" id="mi-prepare"><b>Prepare offline audio</b><small>Render the whole document with the neural voice and store it</small></button>
+    <button class="menu-item" id="mi-ocr"><b>Re-extract with OCR</b><small>For scanned pages where the text came out wrong</small></button>
+    <button class="menu-item danger" id="mi-delete"><b>Delete document</b><small>Removes it from this device</small></button>
+  </div>
+</dialog>
+
+<!-- ══════════════════════════════════════════════════ Outline ══════════ -->
+<dialog class="sheet" id="dlg-outline">
+  <form method="dialog" class="sheet-head">
+    <h2>Sections</h2>
+    <button class="icon-btn" value="cancel" aria-label="Close">
+      <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"/></svg>
+    </button>
+  </form>
+  <div class="menu-list" id="outline-list"></div>
+</dialog>
+
+<!-- ══════════════════════════════════════════════════ Progress ═════════ -->
+<div class="toast-host" id="toast-host" aria-live="polite"></div>
+
+<div class="busy" id="busy" hidden>
+  <div class="busy-card">
+    <div class="spinner" aria-hidden="true"></div>
+    <b id="busy-title">Working…</b>
+    <span id="busy-detail"></span>
+    <div class="bar"><i id="busy-bar"></i></div>
+    <button class="btn small" id="busy-cancel">Cancel</button>
+  </div>
+</div>
+
+<audio id="audio-out" playsinline></audio>
+
+<script type="module" src="js/main.js"></script>
+</body>
+</html>

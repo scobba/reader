@@ -1,0 +1,16 @@
+# Normalise source to LF so the repository and the served site are byte-identical
+# no matter which machine commits. Git on Windows otherwise rewrites line endings.
+* text=auto eol=lf
+
+# Vendored libraries ship verbatim. Never rewrite their bytes.
+vendor/** -text
+
+# Belt and braces for formats that must never be touched.
+*.wasm         binary
+*.gz           binary
+*.traineddata  binary
+*.png          binary
+*.ttf          binary
+*.otf          binary
+*.pfb          binary
+*.pdf          binary

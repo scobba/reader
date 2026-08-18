@@ -1,0 +1,10 @@
+# Sample documents used to test the extractor. They are third-party papers and
+# the app does not need them, so they stay out of the published site.
+test/fixtures/
+
+# OS and editor noise
+Thumbs.db
+Desktop.ini
+.DS_Store
+*.swp
+*~
