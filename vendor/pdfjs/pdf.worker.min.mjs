@@ -1,3 +1,4 @@
+/*mr-compat*/if(typeof Promise!=="undefined"&&!Promise.withResolvers){Promise.withResolvers=function(){let a,b;const p=new Promise((x,y)=>{a=x;b=y});return{promise:p,resolve:a,reject:b}}}
 /**
  * @licstart The following is the entire license notice for the
  * JavaScript code in this page

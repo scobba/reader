@@ -223,3 +223,22 @@ powershell -ExecutionPolicy Bypass -File tools\vendor.ps1 -Force
 - **OCR on a phone is slow.** Keep the app in the foreground while it runs;
   browsers throttle background tabs hard enough to stall it almost completely.
 - **Scanned handwriting** will not work. Tesseract is for printed text.
+
+## Browser requirements
+
+The vendored pdf.js calls `Promise.withResolvers`, which only reached Safari in
+17.4. `tools/vendor.ps1` injects a small polyfill into both pdf.js bundles —
+including the worker one, which runs in its own realm and cannot see a
+polyfill loaded by the page — so older devices work too. Re-running the
+vendor script reapplies it automatically.
+
+With that in place the practical floor is:
+
+| | Minimum |
+|---|---|
+| PDF, HTML, text, speech | iOS 15.4 / Safari 15.4 |
+| EPUB and DOCX (needs `DecompressionStream`) | iOS 16.4 |
+| Keep-screen-awake (Wake Lock) | iOS 16.4 |
+
+Anything older will load the app but fail on import with a message rather than
+working silently badly.

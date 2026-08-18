@@ -10,7 +10,7 @@
  * Bump VERSION whenever any precached file changes; the old cache is dropped
  * on activate.
  */
-const VERSION = 'v1.0.0';
+const VERSION = 'v1.0.1';
 const CORE  = `reader-core-${VERSION}`;
 const HEAVY = 'reader-heavy';        // deliberately unversioned: assets are
                                      // immutable, keyed by their own filename
@@ -21,6 +21,7 @@ const CORE_ASSETS = [
   './manifest.webmanifest',
   './css/app.css',
   './js/main.js',
+  './js/compat.js',
   './js/config.js',
   './js/core/db.js',
   './js/core/settings.js',

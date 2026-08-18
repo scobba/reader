@@ -122,6 +122,34 @@ if (-not $SkipOcr) {
             'tesseract/lang/eng.traineddata.gz' -Optional | Out-Null
 }
 
+# ---------------------------------------------------------------- compat ----
+# pdf.js 6 calls Promise.withResolvers, which only reached Safari in 17.4.
+# Without it, importing a PDF on a slightly older iPhone dies with
+# "undefined is not a function". The worker bundle runs in its own realm and
+# cannot see the page's polyfill, so the shim is injected into both bundles
+# here rather than shipped as a separate file.
+function Add-Compat {
+    param([string]$Relative)
+
+    $full = Join-Path $vendor $Relative
+    if (-not (Test-Path $full)) { return }
+
+    $text = [IO.File]::ReadAllText($full)
+    if ($text.StartsWith('/*mr-compat*/')) {
+        Write-Host ("  shim  {0}  (already patched)" -f $Relative) -ForegroundColor DarkGray
+        return
+    }
+
+    $shim = '/*mr-compat*/if(typeof Promise!=="undefined"&&!Promise.withResolvers){Promise.withResolvers=function(){let a,b;const p=new Promise((x,y)=>{a=x;b=y});return{promise:p,resolve:a,reject:b}}}'
+    [IO.File]::WriteAllText($full, $shim + [Environment]::NewLine + $text, (New-Object Text.UTF8Encoding($false)))
+    Write-Host ("  shim  {0}" -f $Relative) -ForegroundColor Green
+}
+
+Write-Host ""
+Write-Host "Compatibility shims" -ForegroundColor Cyan
+Add-Compat 'pdfjs/pdf.min.mjs'
+Add-Compat 'pdfjs/pdf.worker.min.mjs'
+
 # ------------------------------------------------------------------ done ----
 $total = (Get-ChildItem -Recurse -File $vendor | Measure-Object -Property Length -Sum).Sum
 Write-Host ""
