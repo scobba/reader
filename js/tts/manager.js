@@ -1,6 +1,7 @@
 import { listEngines, getEngineClass } from './engine.js';
 import { settings } from '../core/settings.js';
 import './system.js';   // side effect: registers SystemEngine
+import './piper.js';    // side effect: registers PiperEngine
 import './kokoro.js';   // side effect: registers KokoroEngine
 
 /* Keeps exactly one live engine instance and swaps between them. */

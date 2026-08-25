@@ -10,7 +10,7 @@
  * Bump VERSION whenever any precached file changes; the old cache is dropped
  * on activate.
  */
-const VERSION = 'v1.0.3';
+const VERSION = 'v1.1.0';
 const CORE  = `reader-core-${VERSION}`;
 const HEAVY = 'reader-heavy';        // deliberately unversioned: assets are
                                      // immutable, keyed by their own filename
@@ -44,6 +44,8 @@ const CORE_ASSETS = [
   './js/tts/engine.js',
   './js/tts/manager.js',
   './js/tts/system.js',
+  './js/tts/piper.js',
+  './js/tts/piper-worker.js',
   './js/tts/kokoro.js',
   './js/ui/library.js',
   './js/ui/reader.js',
@@ -87,8 +89,15 @@ self.addEventListener('message', (e) => {
   if (e.data === 'skipWaiting') self.skipWaiting();
 });
 
+/* Large optional runtimes. Vendored so they work offline, but far too big to
+ * force on every install, so they are cached the first time they are actually
+ * used: ~25 MB of OCR engine, and ~38 MB of Piper (the espeak pronunciation
+ * data plus the ONNX WebAssembly builds). Voice models are not here — those
+ * live in the Origin Private File System, managed by the Piper engine. */
 const isHeavy = (url) =>
   url.pathname.includes('/vendor/tesseract/') ||
+  url.pathname.includes('/vendor/piper/') ||
+  url.pathname.includes('/vendor/onnxruntime/') ||
   url.pathname.includes('/vendor/pdfjs/standard_fonts/');
 
 /* On localhost the cache-first strategy below would serve yesterday's code

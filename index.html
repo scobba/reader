@@ -162,6 +162,13 @@
       text of each sentence leaves your device. Every other voice runs entirely on your phone. Apple’s
       voices, including the Enhanced and Premium downloads, are all on-device.</p>
 
+    <div id="voice-manage" hidden>
+      <div class="voice-state" id="voice-state"></div>
+      <div class="bar" id="voice-bar" hidden><i></i></div>
+      <button class="btn primary block" id="btn-voice-download">Download this voice</button>
+      <button class="btn block" id="btn-voice-remove">Remove this voice from the device</button>
+    </div>
+
     <label class="field">
       <span>Speed <b id="set-rate-val">1.0×</b></span>
       <input type="range" id="set-rate" min="0.5" max="3" step="0.05" value="1">

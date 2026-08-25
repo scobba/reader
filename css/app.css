@@ -589,3 +589,35 @@ body[data-playing] .play-btn .i-pause { display: block; }
   -webkit-user-select: text;
   user-select: text;
 }
+
+/* Piper voice management: a voice is a large download, so its state has to be
+   visible at the point of choosing one. */
+.voice-state {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  padding: 9px 11px;
+  border: 1px solid var(--line);
+  border-radius: 11px;
+  background: var(--bg-sub);
+  font-size: 13px;
+  line-height: 1.4;
+  color: var(--text-dim);
+}
+.voice-state b { color: var(--text); font-weight: 620; }
+.voice-state.ready b { color: var(--text); }
+.voice-state .tick { color: #2e9e5b; font-weight: 700; }
+#voice-manage .bar {
+  height: 4px;
+  margin: 10px 0 2px;
+  border-radius: 99px;
+  background: var(--line);
+  overflow: hidden;
+}
+#voice-manage .bar i {
+  display: block;
+  height: 100%;
+  width: 0;
+  background: var(--accent);
+  transition: width .18s ease;
+}

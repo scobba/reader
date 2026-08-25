@@ -139,8 +139,9 @@ export function initDialogs({ refreshLibrary, openDoc, getCurrent, rebuildScript
       paintEngineHint();
     };
 
-    voiceSel.onchange = () => {
+    voiceSel.onchange = async () => {
       settings.set('voice', voiceSel.value);
+      await paintVoiceState();
       if (player.playing) player.goto(player.index, { autoplay: true });
     };
 
@@ -250,12 +251,79 @@ export function initDialogs({ refreshLibrary, openDoc, getCurrent, rebuildScript
       // else's server, which means the sentence text is sent there. That is a
       // privacy decision, so it has to be visible at the point of choosing.
       const where = v.local === false ? ' · sends text online' : '';
-      o.textContent = (v.lang ? `${v.label} · ${v.lang}` : v.label) + where;
+      // Downloadable voices state their cost and whether they are already here.
+      const size = v.megabytes ? ` · ${v.downloaded ? '✓ ready' : `${v.megabytes} MB download`}` : '';
+      o.textContent = (v.lang ? `${v.label} · ${v.lang}` : v.label) + size + where;
       sel.appendChild(o);
     }
     const want = settings.get('voice');
     sel.value = list.some(v => v.id === want) ? want : list[0].id;
     if (sel.value !== want) settings.set('voice', sel.value);
+
+    await paintVoiceState(list);
+  }
+
+  /** The download controls only mean anything for an engine whose voices are
+   *  fetched on demand, so they stay hidden for the platform voices. */
+  async function paintVoiceState(list) {
+    const box = document.getElementById('voice-manage');
+    const state = document.getElementById('voice-state');
+    const dl = document.getElementById('btn-voice-download');
+    const rm = document.getElementById('btn-voice-remove');
+    const e = activeEngine();
+
+    if (!e?.downloadVoice) { box.hidden = true; return; }
+    box.hidden = false;
+
+    const id = settings.get('voice');
+    const v = (list || await e.voices()).find(x => x.id === id);
+    if (!v) { box.hidden = true; return; }
+
+    state.className = 'voice-state' + (v.downloaded ? ' ready' : '');
+    state.innerHTML = '';
+    const strong = document.createElement('b');
+    strong.textContent = v.downloaded ? 'On this device' : `Not downloaded yet`;
+    const rest = document.createElement('span');
+    rest.textContent = v.downloaded
+      ? ' — works offline.'
+      : ` — about ${v.megabytes} MB. Use wifi.`;
+    state.append(strong, rest);
+
+    dl.hidden = v.downloaded;
+    rm.hidden = !v.downloaded;
+
+    dl.onclick = async () => {
+      const bar = document.getElementById('voice-bar');
+      const fill = bar.querySelector('i');
+      bar.hidden = false;
+      dl.disabled = true;
+      dl.textContent = 'Downloading…';
+      try {
+        await e.downloadVoice(id, (p) => {
+          if (!p.total) return;
+          fill.style.width = `${Math.round((p.loaded / p.total) * 100)}%`;
+          dl.textContent = `Downloading ${(p.loaded / 1048576).toFixed(0)} of ${(p.total / 1048576).toFixed(0)} MB`;
+        });
+        toast('Voice ready — this now works offline');
+        await paintVoices();
+      } catch (err) {
+        fail(err, 'Voice download failed: ');
+      } finally {
+        bar.hidden = true;
+        fill.style.width = '0%';
+        dl.disabled = false;
+        dl.textContent = 'Download this voice';
+      }
+    };
+
+    rm.onclick = async () => {
+      if (!confirm(`Remove ${v.label} from this device? You can download it again later.`)) return;
+      try {
+        await e.removeVoice(id);
+        toast('Voice removed');
+        await paintVoices();
+      } catch (err) { fail(err); }
+    };
   }
 
   async function paintStorage() {
@@ -376,8 +444,11 @@ export function initDialogs({ refreshLibrary, openDoc, getCurrent, rebuildScript
       if (!cur) return;
 
       const e = activeEngine();
-      if (!e || e.id !== 'kokoro') {
-        toast('Switch to the neural voice in Settings first — the device voice cannot be saved as audio.', { ms: 5600 });
+      // Only an engine that produces audio can be rendered ahead; the platform
+      // synthesiser speaks straight to the output and hands back nothing we
+      // could store.
+      if (!e || typeof e.renderAll !== 'function') {
+        toast('Switch to Piper in Settings first — the device voice cannot be saved as audio.', { ms: 5600 });
         return;
       }
 

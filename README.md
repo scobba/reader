@@ -53,14 +53,43 @@ downloads are a completely different class, they are free, and they work
 offline. The app picks them up automatically — they will appear in the voice
 list marked with a ✦.
 
-There is also a **neural voice** option in Settings that runs a small model
-(Kokoro-82M) on the device. It sounds better than anything Apple ships and it
-is the only mode where playback keeps going with the screen locked and shows
-lock-screen controls, because it produces real audio rather than driving the
-system synthesiser. The trade-offs are real: about 86 MB downloaded once over
-wifi, and rendering is roughly real-time on a phone, so use **Prepare offline
-audio** from the document menu before you leave rather than expecting it to
-keep up live.
+### Piper — the better option
+
+**Piper** is a neural text-to-speech model that runs entirely on the device.
+It is the recommended voice: clearer and far more natural than anything the
+platform ships, and — because it produces real audio samples rather than
+driving the system synthesiser — it is the only mode where **playback keeps
+going with the screen locked** and the lock-screen transport works. On iOS the
+platform voices stop the moment the screen turns off, which rather defeats the
+point of hands-free listening.
+
+Thirteen American voices are offered, male and female, chosen from the set the
+runtime actually ships. `Amy` and `Ryan` are the easiest to listen to over a
+long article; `Lessac` and the two `HFC` voices have the crispest diction,
+which suits dense clinical text; the `HD` pair sound best and synthesise
+slowest.
+
+Two costs, both stated in the interface rather than hidden:
+
+- **A voice is a one-time ~60 MB download** (~110 MB for the HD pair), kept in
+  the Origin Private File System so it survives restarts. Settings shows which
+  voices are on the device and lets you remove them. Do the first download on
+  wifi.
+- **Synthesis takes time.** Measured at roughly **0.35× real time on a
+  desktop** — about three times faster than playback — but on a phone it is
+  much closer to break-even. Sentences are rendered a few ahead of playback
+  and cached, so it keeps up in practice; for a guaranteed-smooth listen, use
+  **Prepare offline audio** from the document menu first.
+
+The "low" voices are worth understanding: they are the *same* ~60 MB download
+as the medium ones, so they save no space. What they buy is faster synthesis
+at 16 kHz instead of 22 kHz, which only matters on an older phone that cannot
+stay ahead of playback.
+
+Kokoro-82M is also still present as a third option. Piper supersedes it for
+this use case — smaller voices, faster synthesis, and it is the one that has
+actually been verified end to end — so Kokoro can be deleted if you would
+rather have a shorter menu.
 
 ---
 
@@ -265,3 +294,39 @@ outcome is remembered, so only the first import pays for the discovery.
 
 The result is slower on large files and blocks the interface while it parses,
 but it works. Settings › Show diagnostics reports which path was taken.
+
+## Notes on the Piper integration
+
+`@diffusionstudio/vits-web` is published expecting a bundler, so
+`tools/vendor.ps1` applies five rewrites to it after download. Re-running the
+script reapplies them; the patches are idempotent.
+
+1. **`import("onnxruntime-web")`** — a bare specifier. Nothing resolves that in
+   a browser without an import map or a bundler, so it is pointed at the
+   vendored copy.
+2. **`wasm.numThreads = navigator.hardwareConcurrency`** → `1`. Multi-threaded
+   WebAssembly needs `SharedArrayBuffer`, which needs the page to be
+   cross-origin isolated via COOP and COEP headers. GitHub Pages sends neither
+   and they cannot be added, so threading would fail at runtime.
+3. **`ONNX_BASE` and `WASM_BASE`** → `new URL(..., import.meta.url)`. These are
+   read at runtime by Emscripten and onnxruntime, which resolve them against
+   the *worker's* base URL rather than the module's. Anchoring them to
+   `import.meta.url` keeps them correct from any caller and at any deployment
+   sub-path, so the app works at `github.io/reader/` as well as at a domain
+   root.
+4. **`download()` did not await its own write.** It called the OPFS write
+   without awaiting, so the promise resolved while a 60 MB write was still in
+   flight and the next read got a truncated model — surfacing as
+   `No graph was found in the protobuf`. Upstream bug; `predict()`'s
+   on-demand path awaits correctly and is unaffected.
+
+Inference is also moved into `js/tts/piper-worker.js`. The package runs it
+inline despite a docstring claiming otherwise — there is no `Worker` anywhere
+in it — and synthesising a sentence is hundreds of milliseconds of solid
+compute, which would freeze the sentence highlighting on every sentence.
+
+Voice models are deliberately **not** vendored: they are ~60 MB each, there are
+many, and the runtime already caches them in OPFS after first download. The
+runtime itself (~38 MB of espeak pronunciation data and ONNX WebAssembly) *is*
+vendored, but sits in the service worker's lazy tier, so it costs nothing
+unless you actually choose Piper.

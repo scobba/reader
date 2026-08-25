@@ -7,7 +7,7 @@
   Re-running is safe; existing files are skipped unless -Force is passed.
 #>
 [CmdletBinding()]
-param([switch]$Force, [switch]$SkipOcr)
+param([switch]$Force, [switch]$SkipOcr, [switch]$SkipPiper)
 
 $ErrorActionPreference = 'Stop'
 [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
@@ -18,6 +18,9 @@ $vendor = Join-Path $root 'vendor'
 
 $PDFJS_VERSION = '6.2.108'
 $TESS_VERSION  = '7.0.0'
+$VITS_VERSION      = '1.0.3'
+$PIPERWASM_VERSION = '1.0.0'
+$ORT_VERSION       = '1.18.0'
 
 function Get-Dep {
     param([string]$Url, [string]$Dest, [switch]$Optional)
@@ -122,6 +125,39 @@ if (-not $SkipOcr) {
             'tesseract/lang/eng.traineddata.gz' -Optional | Out-Null
 }
 
+# ---------------------------------------------------------------- piper ----
+# Piper neural TTS. Three packages that have to agree with each other:
+#   vits-web        - the orchestration layer (voice list, OPFS caching)
+#   piper-wasm      - espeak-ng phonemiser; the 17 MB .data file is its
+#                     pronunciation dictionary and is not optional
+#   onnxruntime-web - runs the VITS model
+#
+# Voice models themselves are NOT vendored: they are ~63 MB each, there are
+# many, and vits-web already caches them in the Origin Private File System
+# after the first download.
+if (-not $SkipPiper) {
+    Write-Host ""
+    Write-Host "piper (vits-web $VITS_VERSION)" -ForegroundColor Cyan
+    $vitsBase = "https://cdn.jsdelivr.net/npm/@diffusionstudio/vits-web@$VITS_VERSION/dist"
+    Get-Dep "$vitsBase/vits-web.js"          'piper/vits-web.js'          | Out-Null
+    Get-Dep "$vitsBase/piper-DeOu3H9E.js"    'piper/piper-DeOu3H9E.js'    | Out-Null
+
+    Write-Host "piper-wasm $PIPERWASM_VERSION (phonemiser)" -ForegroundColor Cyan
+    $pwBase = "https://cdn.jsdelivr.net/npm/@diffusionstudio/piper-wasm@$PIPERWASM_VERSION/build/piper_phonemize"
+    Get-Dep "$pwBase.js"   'piper/piper_phonemize.js'   | Out-Null
+    Get-Dep "$pwBase.wasm" 'piper/piper_phonemize.wasm' | Out-Null
+    Get-Dep "$pwBase.data" 'piper/piper_phonemize.data' | Out-Null
+
+    Write-Host "onnxruntime-web $ORT_VERSION" -ForegroundColor Cyan
+    $ortBase = "https://cdn.jsdelivr.net/npm/onnxruntime-web@$ORT_VERSION/dist"
+    # The wasm-only ESM backend: no WebGL or WebGPU, which we do not use and
+    # which would pull in another 20 MB of binaries.
+    Get-Dep "$ortBase/esm/ort.wasm.min.js" 'onnxruntime/ort.wasm.min.js' | Out-Null
+    # Both SIMD and plain builds: the loader feature-detects and asks for one
+    # of them by name, and a missing variant is a hard failure at runtime.
+    Get-Dep "$ortBase/ort-wasm-simd.wasm"  'onnxruntime/ort-wasm-simd.wasm'  | Out-Null
+    Get-Dep "$ortBase/ort-wasm.wasm"       'onnxruntime/ort-wasm.wasm'       | Out-Null
+}
 # ---------------------------------------------------------------- compat ----
 # pdf.js 6 calls Promise.withResolvers, which only reached Safari in 17.4.
 # Without it, importing a PDF on a slightly older iPhone dies with
@@ -154,9 +190,53 @@ function Add-Compat {
 }
 
 Write-Host ""
+# vits-web ships expecting a bundler. Three things must change before it can
+# run from a plain <script type="module"> on a static host.
+function Patch-Vits {
+    $full = Join-Path $vendor 'piper/vits-web.js'
+    if (-not (Test-Path $full)) { return }
+    $src = [IO.File]::ReadAllText($full)
+    $hits = 0
+
+    # 1. A bare specifier. Nothing resolves "onnxruntime-web" in a browser
+    #    without an import map or a bundler, so point it at the vendored file.
+    if ($src -match 'import\("onnxruntime-web"\)') {
+        $src = $src -replace 'import\("onnxruntime-web"\)', 'import("../onnxruntime/ort.wasm.min.js")'
+        $hits++
+    }
+
+    # 2. Multi-threaded WASM needs SharedArrayBuffer, which needs the page to
+    #    be cross-origin isolated (COOP + COEP). GitHub Pages sends neither
+    #    header and they cannot be added, so threading would fail at runtime.
+    if ($src -match 'wasm\.numThreads\s*=\s*navigator\.hardwareConcurrency') {
+        $src = $src -replace 'wasm\.numThreads\s*=\s*navigator\.hardwareConcurrency', 'wasm.numThreads=1'
+        $hits++
+    }
+
+    # 3. Runtime assets must come from our own origin, not a CDN, or the app
+    #    stops working the moment it goes offline.
+    $before = $src
+    $src = $src -replace '"https://cdnjs\.cloudflare\.com/ajax/libs/onnxruntime-web/[0-9.]+/"', 'new URL("../onnxruntime/",import.meta.url).href'
+    $src = $src -replace '"https://cdn\.jsdelivr\.net/npm/@diffusionstudio/piper-wasm@[0-9.]+/build/piper_phonemize"', 'new URL("./piper_phonemize",import.meta.url).href'
+    if ($src -ne $before) { $hits += 2 }
+
+    # 4. Upstream bug: download() fires the OPFS write without awaiting it, so
+    #    the promise resolves while a 63 MB write is still in flight and the
+    #    next read gets a truncated model ("No graph was found in the
+    #    protobuf"). predict()'s own on-demand path awaits correctly; only the
+    #    explicit download() API is affected.
+    $pat = '(\s)p\(a, await S\('
+    if ($src -match $pat) {
+        $src = $src -replace $pat, '$1await p(a, await S('
+        $hits++
+    }
+    [IO.File]::WriteAllText($full, $src, (New-Object Text.UTF8Encoding($false)))
+    Write-Host ("  patch piper/vits-web.js  ({0} rewrites)" -f $hits) -ForegroundColor Green
+}
 Write-Host "Compatibility shims" -ForegroundColor Cyan
 Add-Compat 'pdfjs/pdf.min.mjs'
 Add-Compat 'pdfjs/pdf.worker.min.mjs'
+if (-not $SkipPiper) { Patch-Vits }
 
 # ------------------------------------------------------------------ done ----
 $total = (Get-ChildItem -Recurse -File $vendor | Measure-Object -Property Length -Sum).Sum
