@@ -86,10 +86,8 @@ as the medium ones, so they save no space. What they buy is faster synthesis
 at 16 kHz instead of 22 kHz, which only matters on an older phone that cannot
 stay ahead of playback.
 
-Kokoro-82M is also still present as a third option. Piper supersedes it for
-this use case — smaller voices, faster synthesis, and it is the one that has
-actually been verified end to end — so Kokoro can be deleted if you would
-rather have a shorter menu.
+Kokoro-82M was removed once Piper superseded it: smaller voices, faster
+synthesis, and no dependency on a CDN at runtime.
 
 ---
 
@@ -215,7 +213,8 @@ js/
   tts/
     engine.js         engine contract, WAV encoding, shared audio element
     system.js         Web Speech API (+ three browser bug workarounds)
-    kokoro.js         on-device neural TTS
+    piper.js          on-device neural TTS (Piper)
+    piper-worker.js   synthesis worker, so it never blocks the UI
   ui/                 library, reader, dialogs, toasts
 vendor/               pdf.js + tesseract.js, fetched by tools/vendor.ps1
 tools/

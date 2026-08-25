@@ -10,7 +10,7 @@
  * Bump VERSION whenever any precached file changes; the old cache is dropped
  * on activate.
  */
-const VERSION = 'v1.1.0';
+const VERSION = 'v1.1.1';
 const CORE  = `reader-core-${VERSION}`;
 const HEAVY = 'reader-heavy';        // deliberately unversioned: assets are
                                      // immutable, keyed by their own filename
@@ -46,7 +46,6 @@ const CORE_ASSETS = [
   './js/tts/system.js',
   './js/tts/piper.js',
   './js/tts/piper-worker.js',
-  './js/tts/kokoro.js',
   './js/ui/library.js',
   './js/ui/reader.js',
   './js/ui/dialogs.js',
@@ -113,7 +112,7 @@ self.addEventListener('fetch', (e) => {
   const url = new URL(req.url);
 
   // Never touch cross-origin traffic: article fetches must stay live, and the
-  // Kokoro model download is handled by the browser's own HTTP cache.
+  // Piper voice download is stored in OPFS by the engine rather than here.
   if (url.origin !== self.location.origin) return;
 
   // Navigations: network first so a redeploy is picked up, cache as fallback.

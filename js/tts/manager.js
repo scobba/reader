@@ -2,7 +2,6 @@ import { listEngines, getEngineClass } from './engine.js';
 import { settings } from '../core/settings.js';
 import './system.js';   // side effect: registers SystemEngine
 import './piper.js';    // side effect: registers PiperEngine
-import './kokoro.js';   // side effect: registers KokoroEngine
 
 /* Keeps exactly one live engine instance and swaps between them. */
 
@@ -22,6 +21,11 @@ export function activeEngine() { return active; }
 export async function setActiveEngine(id, onProgress) {
   const Cls = getEngineClass(id) || getEngineClass('system');
   if (!Cls) throw new Error('No speech engine is available in this browser');
+
+  // A saved preference can name an engine that no longer exists — Kokoro was
+  // removed once Piper superseded it. Correct the stored value rather than
+  // leaving the settings dropdown pointing at nothing.
+  if (Cls.id !== id) settings.set('engine', Cls.id);
 
   if (active && active.id === Cls.id) return active;
 

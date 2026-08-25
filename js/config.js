@@ -15,15 +15,6 @@ export const TESSERACT = {
   lang:   new URL('../vendor/tesseract/lang/', import.meta.url).href,
 };
 
-/** Kokoro is the one thing not vendored: it pulls @huggingface/transformers
- *  and an ~86 MB model, which has to come off the network the first time
- *  regardless. After that the browser's HTTP cache holds it. */
-export const KOKORO = {
-  lib:   'https://cdn.jsdelivr.net/npm/kokoro-js@1.2.1/dist/kokoro.web.js',
-  model: 'onnx-community/Kokoro-82M-v1.0-ONNX',
-  dtype: 'q8',
-};
-
 /** Sentences longer than this are split at a clause boundary. Keeps highlight
  *  granularity useful and stops iOS Safari truncating long utterances. */
 export const MAX_SENTENCE_CHARS = 300;

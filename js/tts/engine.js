@@ -1,9 +1,9 @@
 /* The speech engine contract.
  *
  * Two implementations ship: the platform's own synthesiser (instant, free,
- * no download) and Kokoro (a small neural model that runs on-device and
- * sounds markedly better). They differ in one way that matters architecturally:
- * the system engine speaks text and tells us when it finished, while Kokoro
+ * no download) and Piper (a neural model that runs on-device and sounds
+ * markedly better). They differ in one way that matters architecturally: the
+ * system engine speaks text and tells us when it finished, while Piper
  * *produces audio*, which we play through a real <audio> element — and that
  * is what buys lock-screen controls and playback with the screen off.
  *
