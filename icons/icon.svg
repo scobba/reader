@@ -1,33 +1,24 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" role="img" aria-label="Mobile Reader">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" role="img" aria-label="Reader">
+  <!-- The PNGs beside this file are drawn from the same numbers by
+       tools/make-icons.ps1, so the two have to stay in step. Two things keep
+       that honest: the R is one monoline stroke — a stem, a bowl and a leg —
+       rather than a font glyph, since GDI+ on Windows and a browser here
+       would not agree on any typeface; and both gradients are in user space,
+       so neither renderer has to resolve them against a bounding box. -->
   <defs>
-    <linearGradient id="bg" x1="0" y1="0" x2="0" y2="1">
-      <stop offset="0" stop-color="#1d2530"/>
-      <stop offset="1" stop-color="#0d1116"/>
+    <linearGradient id="bg" gradientUnits="userSpaceOnUse" x1="0" y1="0" x2="512" y2="512">
+      <stop offset="0" stop-color="#FFFDFB"/>
+      <stop offset="1" stop-color="#EFEBFA"/>
     </linearGradient>
-    <linearGradient id="acc" x1="0" y1="0" x2="1" y2="1">
-      <stop offset="0" stop-color="#5c9dff"/>
-      <stop offset="1" stop-color="#1f6feb"/>
+    <linearGradient id="ink" gradientUnits="userSpaceOnUse" x1="185.6" y1="112" x2="326.4" y2="400">
+      <stop offset="0" stop-color="#FF6B4A"/>
+      <stop offset="1" stop-color="#5B4BE8"/>
     </linearGradient>
   </defs>
 
   <rect width="512" height="512" rx="112" fill="url(#bg)"/>
 
-  <!-- page -->
-  <rect x="112" y="86" width="230" height="300" rx="22" fill="#f2f5f9"/>
-  <g fill="#aab4c2">
-    <rect x="146" y="134" width="162" height="15" rx="7.5"/>
-    <rect x="146" y="177" width="162" height="15" rx="7.5"/>
-    <rect x="146" y="220" width="128" height="15" rx="7.5"/>
-    <rect x="146" y="263" width="150" height="15" rx="7.5"/>
-    <rect x="146" y="306" width="96"  height="15" rx="7.5"/>
-  </g>
-
-  <!-- sound -->
-  <g fill="none" stroke="url(#acc)" stroke-width="26" stroke-linecap="round">
-    <path d="M352 214a58 58 0 0 1 0 84"/>
-    <path d="M398 178a112 112 0 0 1 0 156"/>
-  </g>
-
-  <circle cx="330" cy="378" r="76" fill="url(#acc)"/>
-  <path d="M312 348l52 30-52 30z" fill="#0d1116"/>
+  <path d="M168 400 V112 H254 a64 64 0 0 1 0 128 H168 m78 0 L344 400"
+        fill="none" stroke="url(#ink)" stroke-width="56"
+        stroke-linecap="round" stroke-linejoin="round"/>
 </svg>

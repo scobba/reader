@@ -10,7 +10,7 @@
  * Bump VERSION whenever any precached file changes; the old cache is dropped
  * on activate.
  */
-const VERSION = 'v1.1.2';
+const VERSION = 'v1.1.3';
 const CORE  = `reader-core-${VERSION}`;
 const HEAVY = 'reader-heavy';        // deliberately unversioned: assets are
                                      // immutable, keyed by their own filename
