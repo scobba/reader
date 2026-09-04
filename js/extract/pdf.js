@@ -245,16 +245,67 @@ async function readMeta(doc, blocks) {
   } catch { /* metadata is optional */ }
 
   // Embedded PDF titles are very often the LaTeX filename or "untitled".
-  // The first real heading beats them nearly every time.
+  // A heading off the page beats them nearly every time.
   const bad = /^(untitled|microsoft word|document\d*|manuscript|paper|\d+\.(pdf|doc)|.*\.(indd|tex|dvi|qxd))/i;
   if (!out.title || bad.test(out.title)) {
-    const head = blocks.find(b =>
-      (b.type === 'heading' || b.type === 'para') &&
-      b.text.length > 14 && b.text.length < 220 &&
-      !/^(abstract|introduction|keywords?)\b/i.test(b.text));
-    if (head) out.title = head.text.replace(/\s+/g, ' ').trim();
+    const head = titleFromBlocks(blocks);
+    if (head) out.title = head;
   }
   return out;
+}
+
+/** Pick the title off the front of the document.
+ *
+ *  Exported for test/title.test.mjs; nothing else calls it.
+ *
+ *  Taking the first sizeable block is wrong on exactly the documents this app
+ *  is for: a journal's masthead sits above the title and is set larger than
+ *  it, so first gives "The new england" and largest gives it too. Two things
+ *  together get it right — a title is display type, which rules out the
+ *  author list and the strapline, and it is a phrase rather than a name,
+ *  which rules out the masthead.
+ *
+ *  Short titles are real, though, so the phrase test only chooses between
+ *  candidates; it never disqualifies the only one there is. */
+export function titleFromBlocks(blocks) {
+  const clean = (b) => b.text.replace(/\s+/g, ' ').trim();
+  const eligible = (b) =>
+    (b.type === 'heading' || b.type === 'para') &&
+    !/^(abstract|summary|introduction|keywords?|highlights?)\b/i.test(b.text);
+
+  // The size most of the document's characters are set in, as linesToBlocks
+  // measures it. Anything at that size is body text, whatever else it is.
+  const weight = new Map();
+  for (const b of blocks) {
+    const k = Math.round((b.size || 0) * 2) / 2;
+    weight.set(k, (weight.get(k) || 0) + b.text.length);
+  }
+  let bodySize = 0, heaviest = -1;
+  for (const [k, w] of weight) if (w > heaviest) { heaviest = w; bodySize = k; }
+
+  const candidates = blocks.filter((b) => {
+    if (b.page > (blocks[0]?.page ?? 1) + 1) return false;
+    if (!eligible(b)) return false;
+    if (!(b.size > bodySize * 1.15)) return false;
+    const t = clean(b);
+    return t.length >= 15 && t.length <= 220;
+  });
+
+  const largest = (list) =>
+    list.reduce((best, b) => (!best || b.size > best.size ? b : best), null);
+  const phrases = candidates.filter((b) => {
+    const t = clean(b);
+    return t.length >= 25 && t.split(' ').length >= 4;
+  });
+
+  const pick = largest(phrases) || largest(candidates);
+  if (pick) return clean(pick);
+
+  // No display type anywhere — a plain report, or a page of one size. The old
+  // rule stands: a short title is better than no title.
+  const head = blocks.find(
+    (b) => eligible(b) && b.text.length > 14 && b.text.length < 220);
+  return head ? clean(head) : null;
 }
 
 /** Open a document and keep it open. The OCR path rasterises every page, and

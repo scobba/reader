@@ -222,6 +222,47 @@ test('leaves a large initial that is not a drop cap alone', () => {
   assert.equal(lines[0].text, 'A');
 });
 
+/* ── letter-spaced headings ───────────────────────────────────────────── */
+
+test('rejoins a letter-spaced section head', () => {
+  // Tracking wide enough that pdf.js reads the gaps between glyph runs as
+  // spaces. All three of these are real, off one NEJM article.
+  const cases = [
+    ['a bs tr ac t', 'abstract'],
+    ['Me thods', 'Methods'],
+    ['R esult s', 'Results'],
+  ];
+  for (const [broken, want] of cases) {
+    const lines = pageLines([atom(broken, 62, 63, 12)], PAGE, 1);
+    assert.equal(lines[0].text, want);
+  }
+});
+
+test('a rejoined head is a heading again, not a paragraph', () => {
+  // The point of the repair: a mangled head stops matching HEADING_WORDS, so
+  // it is filed as prose and vanishes from "Jump to section".
+  const atoms = [
+    atom('Me thods', 62, 63, 12),
+    ...column(62, 87, LEFT),
+  ];
+  const blocks = linesToBlocks(pageLines(atoms, PAGE, 1));
+  assert.equal(blocks[0].type, 'heading');
+  assert.equal(blocks[0].text, 'Methods');
+});
+
+test('leaves ordinary prose alone', () => {
+  const kept = [
+    'the results were inconclusive',
+    'no findings of harm were reported',
+    'Data were collected by the trial site investigators',
+    'agents and methods used in the unit',
+  ];
+  for (const t of kept) {
+    const lines = pageLines([atom(t, 62, 63)], PAGE, 1);
+    assert.equal(lines[0].text, t);
+  }
+});
+
 /* ── paragraph assembly ───────────────────────────────────────────────── */
 
 test('stitches a paragraph running from one column into the next', () => {

@@ -127,6 +127,8 @@ the last line, but comfortably more than a line's worth of leading.
 After that it clusters glyphs into lines by baseline, lifts drop caps back to
 the head of the paragraph they open — a cap set three lines deep otherwise
 rests on the last of them, and the article starts "cute respiratory failure" —
+rejoins letter-spaced section heads, since journals track them wide enough
+that pdf.js reads the gaps as spaces and "Methods" arrives as "Me thods",
 merges lines into paragraphs using gap, indent and short-line-ending signals,
 drops superscript citation markers while it still knows the surrounding font
 size, and removes running heads and footers by finding lines that repeat
@@ -241,6 +243,7 @@ tools/
   serve.ps1           local static server
 test/
   layout.test.mjs     regression tests for the XY-cut and paragraph assembly
+  title.test.mjs      which line of a title page is the title
   fixtures/           sample documents; safe to delete before deploying
 ```
 
@@ -259,7 +262,8 @@ constant can quietly ruin every document without throwing anything. The tests
 build page geometry by hand, one case per layout the XY-cut has to get right:
 tight two- and three-column measures, a full-width heading or footer crossing
 the gutter, a marginal note, list markers hanging in the margin, drop caps,
-and a paragraph running from the foot of one column to the head of the next.
+letter-spaced section heads, and a paragraph running from the foot of one
+column to the head of the next.
 
 `vendor/` is about 56 MB, but only ~2.5 MB of it (the shell plus pdf.js) is
 precached on install. The OCR engine and its language model are the bulk, and
@@ -291,19 +295,38 @@ powershell -ExecutionPolicy Bypass -File tools\vendor.ps1 -Force
 
 ## Browser requirements
 
-The vendored pdf.js depends on two things WebKit does not provide, and both are
-patched into the bundles by `toolsvendor.ps1` (re-running it reapplies them):
+pdf.js 6 is built against a very recent JavaScript baseline. None of what it
+assumes is an optional extra — every one of these sits on the path a document
+actually takes, so a missing one is not a degraded feature, it is a file that
+will not open. All of them are patched into the bundles by `tools/vendor.ps1`
+(re-running it reapplies them):
 
-1. **`Promise.withResolvers`** — absent before Safari 17.4.
-2. **Async iteration over a `ReadableStream`** — that is, `for await (const
-   chunk of stream)`. Chrome and Firefox ship it; **Safari still does not, at
-   any version**. pdf.js streams text out of its worker and consumes it with
-   exactly that loop, so without this polyfill `getTextContent()` throws
-   "undefined is not a function" and no PDF can be read on an iPhone at all.
+| Needs | Since | Used for |
+|---|---|---|
+| `Promise.withResolvers` | Safari 17.4 | called in dozens of places |
+| async iteration over a `ReadableStream` | **never shipped** | how pdf.js consumes its own text stream |
+| `Promise.try` | Safari 18.2 | the worker message handler wraps every call in it |
+| `Uint8Array` `toBase64` / `fromBase64` / `toHex` | Safari 18.2 | document fingerprints, embedded font CSS |
+| `Math.sumPrecise` | Safari 18.4 | the font sanitiser sizes every glyph table with it |
+| `Map` / `WeakMap` `getOrInsert`, `getOrInsertComputed` | Safari 26 | dictionary parsing, and `getMetadata()` |
+
+Async iteration over a `ReadableStream` is the one Safari has never shipped at
+any version: pdf.js streams text out of its worker and consumes it with
+`for await (const chunk of stream)`, so without that polyfill
+`getTextContent()` throws "undefined is not a function" and no PDF can be read
+on an iPhone at all.
+
+The last row fails more quietly than the rest. `getMetadata()` is called inside
+a `try` that treats metadata as optional, so nothing breaks — the document just
+loses its embedded title and gets named after whatever heading comes first,
+which on a journal PDF is the masthead. A document in the library called *The
+new england* is this, not a layout problem.
 
 The worker bundle runs in its own realm and cannot see a polyfill loaded by the
 page, so the shim is injected into both `pdf.min.mjs` and `pdf.worker.min.mjs`
-rather than shipped only as `js/compat.js`.
+rather than shipped only as `js/compat.js`. It is one line, wrapped in an IIFE:
+the bundles are minified modules whose top-level names are single letters, and
+anything the shim declared at module scope would eventually collide with one.
 
 With those in place the practical floor is:
 

@@ -159,25 +159,41 @@ if (-not $SkipPiper) {
     Get-Dep "$ortBase/ort-wasm.wasm"       'onnxruntime/ort-wasm.wasm'       | Out-Null
 }
 # ---------------------------------------------------------------- compat ----
-# pdf.js 6 calls Promise.withResolvers, which only reached Safari in 17.4.
-# Without it, importing a PDF on a slightly older iPhone dies with
-# "undefined is not a function". The worker bundle runs in its own realm and
-# cannot see the page's polyfill, so the shim is injected into both bundles
-# here rather than shipped as a separate file.
+# pdf.js 6 is built against a very recent JavaScript baseline: it calls
+# language features that reached Safari between 17.4 and 26. On an iPhone even
+# slightly behind, importing a PDF dies with "undefined is not a function".
+# The worker bundle runs in its own realm and cannot see the page's polyfill,
+# so the shim is injected into both bundles here rather than shipped as a
+# separate file.
 function Add-Compat {
     param([string]$Relative)
 
     $full = Join-Path $vendor $Relative
     if (-not (Test-Path $full)) { return }
 
-    # Two gaps break pdf.js on WebKit:
-    #   Promise.withResolvers      - absent before Safari 17.4
+    # What pdf.js needs and WebKit may not have. Everything here is called on
+    # the path a document actually takes, so a missing one is not a degraded
+    # feature, it is a file that will not open:
+    #   Promise.withResolvers      - Safari 17.4; called in dozens of places
     #   ReadableStream async iter. - still absent; pdf.js consumes its text
     #                                stream with `for await (... of stream)`,
-    #                                so getTextContent throws without it.
+    #                                so getTextContent throws without it
+    #   Promise.try                - Safari 18.2; the worker message handler
+    #                                wraps every single call in it
+    #   Uint8Array to/fromBase64   - Safari 18.2; document fingerprints and
+    #                                embedded font CSS
+    #   Math.sumPrecise            - Safari 18.4; the font sanitiser sizes
+    #                                every glyph table with it
+    #   Map/WeakMap.getOrInsert*   - Safari 26; dictionary parsing, and
+    #                                getMetadata throws without it, which is
+    #                                how a document ends up titled after the
+    #                                journal's masthead
+    # Kept as one line and wrapped in an IIFE: the bundles are minified modules
+    # whose top-level names are single letters, so anything the shim declares
+    # at module scope would eventually collide with one of them.
     # The worker bundle runs in its own realm and cannot see the page polyfill,
     # so the shim goes into both bundles.
-    $shim = '/*mr-compat*/if(typeof Promise!=="undefined"&&!Promise.withResolvers){Promise.withResolvers=function(){let a,b;const p=new Promise((x,y)=>{a=x;b=y});return{promise:p,resolve:a,reject:b}}}if(typeof ReadableStream!=="undefined"&&Symbol.asyncIterator&&!ReadableStream.prototype[Symbol.asyncIterator]){const v=function(o){const pc=!!(o&&o.preventCancel);const r=this.getReader();return{next(){return r.read().then(x=>{if(x.done)r.releaseLock();return x},e=>{r.releaseLock();throw e})},return(x){if(pc){r.releaseLock();return Promise.resolve({done:true,value:x})}return r.cancel(x).then(()=>{r.releaseLock();return{done:true,value:x}})},throw(e){r.releaseLock();return Promise.reject(e)},[Symbol.asyncIterator](){return this}}};const d={value:v,writable:true,configurable:true};Object.defineProperty(ReadableStream.prototype,Symbol.asyncIterator,d);if(!ReadableStream.prototype.values){Object.defineProperty(ReadableStream.prototype,"values",d)}}'
+    $shim = '/*mr-compat*/(function(){if(typeof Promise!=="undefined"&&!Promise.withResolvers){Promise.withResolvers=function(){let a,b;const p=new Promise((x,y)=>{a=x;b=y});return{promise:p,resolve:a,reject:b}}}if(typeof Promise!=="undefined"&&!Promise.try){Promise.try=function(f,...a){return new Promise(r=>r(f(...a)))}}const D=(o,n,v)=>{if(o&&!(n in o))Object.defineProperty(o,n,{value:v,writable:true,configurable:true})};const gi=function(k,v){if(!this.has(k))this.set(k,v);return this.get(k)};const gic=function(k,f){if(!this.has(k))this.set(k,f(k));return this.get(k)};if(typeof Map!=="undefined"){D(Map.prototype,"getOrInsert",gi);D(Map.prototype,"getOrInsertComputed",gic)}if(typeof WeakMap!=="undefined"){D(WeakMap.prototype,"getOrInsert",gi);D(WeakMap.prototype,"getOrInsertComputed",gic)}if(!Math.sumPrecise){Math.sumPrecise=function(xs){let s=0,c=0;for(const x of xs){const t=s+x;c+=Math.abs(s)>=Math.abs(x)?(s-t)+x:(x-t)+s;s=t}return s+c}}if(typeof Uint8Array!=="undefined"){D(Uint8Array.prototype,"toHex",function(){let s="";for(let i=0;i<this.length;i++)s+=this[i].toString(16).padStart(2,"0");return s});if(typeof btoa!=="undefined")D(Uint8Array.prototype,"toBase64",function(){let s="";for(let i=0;i<this.length;i+=8192)s+=String.fromCharCode.apply(null,this.subarray(i,i+8192));return btoa(s)});if(typeof atob!=="undefined")D(Uint8Array,"fromBase64",function(b){const s=atob(b),u=new Uint8Array(s.length);for(let i=0;i<s.length;i++)u[i]=s.charCodeAt(i);return u})}if(typeof ReadableStream!=="undefined"&&typeof Symbol!=="undefined"&&Symbol.asyncIterator&&!ReadableStream.prototype[Symbol.asyncIterator]){const v=function(o){const pc=!!(o&&o.preventCancel);const r=this.getReader();return{next(){return r.read().then(x=>{if(x.done)r.releaseLock();return x},e=>{r.releaseLock();throw e})},return(x){if(pc){r.releaseLock();return Promise.resolve({done:true,value:x})}return r.cancel(x).then(()=>{r.releaseLock();return{done:true,value:x}})},throw(e){r.releaseLock();return Promise.reject(e)},[Symbol.asyncIterator](){return this}}};const d={value:v,writable:true,configurable:true};Object.defineProperty(ReadableStream.prototype,Symbol.asyncIterator,d);if(!ReadableStream.prototype.values){Object.defineProperty(ReadableStream.prototype,"values",d)}}})();'
 
     $lines = [IO.File]::ReadAllText($full)
     # Drop any previous shim so re-running always installs the current one.

@@ -415,6 +415,50 @@ function regionToLines(region, page, pageNum) {
   return lines.map(l => finishLine(l, region, page, pageNum)).filter(Boolean);
 }
 
+/* Journals letter-space their section heads, and the tracking is wide enough
+ * that pdf.js reads the gaps between glyph runs as spaces. This article's
+ * heads arrive as "a bs tr ac t", "Me thods" and "R esult s".
+ *
+ * The spaces are pdf.js's judgement, not the file's, and nothing in the text
+ * says which are real: "Me thods" and "the thing" have the same shape. So the
+ * repair is deliberately narrow — fragments are only rejoined when doing so
+ * spells one of the words a section head is actually made of. That leaves
+ * tracked prose alone, which is the right way round: a mangled heading also
+ * stops matching HEADING_WORDS below, so it is filed as a paragraph and
+ * disappears from "Jump to section". */
+const TRACKED_WORDS = new Set([
+  'abstract', 'summary', 'background', 'introduction', 'objective', 'objectives',
+  'method', 'methods', 'materials', 'design', 'participants', 'patients',
+  'randomization', 'randomisation', 'intervention', 'interventions', 'outcome',
+  'outcomes', 'statistical', 'analysis', 'result', 'results', 'finding',
+  'findings', 'discussion', 'conclusion', 'conclusions', 'limitation',
+  'limitations', 'implications', 'reference', 'references', 'bibliography',
+  'acknowledgment', 'acknowledgments', 'acknowledgement', 'acknowledgements',
+  'funding', 'appendix', 'keyword', 'keywords', 'highlights', 'supplementary',
+]);
+
+/** Rejoin a letter-spaced heading, and only a heading: heading-shaped lines
+ *  only, and only where the join spells a word from the list above. */
+function repairTracked(text) {
+  if (text.length > 60 || /\d/.test(text) || /[.!?]$/.test(text)) return text;
+
+  const toks = text.split(' ');
+  if (toks.length < 2) return text;
+
+  const out = [];
+  for (let i = 0; i < toks.length; i++) {
+    let joined = null, end = i, acc = toks[i];
+    // A word letter-spaced into single glyphs can be a lot of fragments.
+    for (let j = i + 1; j < toks.length && j - i <= 8; j++) {
+      acc += toks[j];
+      if (TRACKED_WORDS.has(acc.toLowerCase())) { joined = acc; end = j; }
+    }
+    out.push(joined ?? toks[i]);
+    i = end;
+  }
+  return out.join(' ');
+}
+
 function finishLine(line, region, page, pageNum) {
   const parts = [...line.atoms].sort((a, b) => a.x0 - b.x0);
   const bodySize = median(parts.map(p => p.size)) || 10;
@@ -444,7 +488,7 @@ function finishLine(line, region, page, pageNum) {
     text += p.text;
   }
 
-  text = text.replace(/\s+/g, ' ').trim();
+  text = repairTracked(text.replace(/\s+/g, ' ').trim());
   if (!text) return null;
 
   const box = bbox(parts);
@@ -553,7 +597,13 @@ function joinWrapped(a, b) {
 
 /**
  * Merge ordered lines into typed blocks.
- * @returns {Array<{type:'heading'|'para'|'caption', text:string, page:number, level?:number}>}
+ *
+ * `size` is the type size the block opens at. Nothing downstream reads it to
+ * speak the text, but it is the only thing that says which of the large lines
+ * on a title page is the title.
+ *
+ * @returns {Array<{type:'heading'|'para'|'caption', text:string, page:number,
+ *                  size:number, level?:number}>}
  */
 export function linesToBlocks(lines) {
   if (!lines.length) return [];
@@ -620,6 +670,7 @@ export function linesToBlocks(lines) {
         text: l.text,
         page: l.page,
         level: l.size >= bodySize * 1.35 ? 1 : 2,
+        size: l.size,
       });
       prev = l;
       continue;
@@ -658,6 +709,7 @@ export function linesToBlocks(lines) {
         type: isCaption(l.text) ? 'caption' : 'para',
         text: l.text,
         page: l.page,
+        size: l.size,
       };
     } else {
       cur.text = joinWrapped(cur.text, l.text);
