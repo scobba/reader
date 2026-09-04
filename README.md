@@ -106,13 +106,31 @@ and produces nonsense.
 gutters, prefers vertical cuts, and recurses. Preferring vertical cuts is what
 makes a full-width title above two columns come out right — the title blocks
 any full-height gutter, so the page splits horizontally first (title | body),
-and only then does the body split into columns. Guards on region width stop a
-couple of short ragged-right lines from being mistaken for a column break.
+and only then does the body split into columns.
 
-After that it clusters glyphs into lines by baseline, merges lines into
-paragraphs using gap, indent and short-line-ending signals, drops superscript
-citation markers while it still knows the surrounding font size, and removes
-running heads and footers by finding lines that repeat across pages.
+Deciding what counts as a gutter is the whole game, because a false one
+scrambles reading order worse than a missed one does. Width alone is not
+enough to decide it: NEJM leaves 0.9 em between columns, narrower than a
+threshold generous enough to ignore the holes that ragged-right text leaves.
+So a narrow channel has to earn it — it must be far wider than the region's
+own word spacing, the columns either side of it must run alongside each other
+for several lines, and at least one of the two edges it cuts must be straight.
+A channel that survives all three is a gutter; prose that happens to leave a
+hole satisfies none of them.
+
+The same page also has to survive whatever crosses the gutter. A footer under
+a two-column abstract covers the channel and would weld the columns together,
+so the horizontal cut that peels it off is measured against the text's own
+line pitch rather than its font size — a footer sits well under an em below
+the last line, but comfortably more than a line's worth of leading.
+
+After that it clusters glyphs into lines by baseline, lifts drop caps back to
+the head of the paragraph they open — a cap set three lines deep otherwise
+rests on the last of them, and the article starts "cute respiratory failure" —
+merges lines into paragraphs using gap, indent and short-line-ending signals,
+drops superscript citation markers while it still knows the surrounding font
+size, and removes running heads and footers by finding lines that repeat
+across pages.
 
 Scanned pages have no text layer at all, so they go through Tesseract instead —
 and the OCR word boxes are fed through *the same* pipeline, because a scanned
@@ -221,8 +239,27 @@ tools/
   vendor.ps1          downloads third-party runtime deps
   make-icons.ps1      renders the PNG app icons
   serve.ps1           local static server
-test/fixtures/        sample documents; safe to delete before deploying
+test/
+  layout.test.mjs     regression tests for the XY-cut and paragraph assembly
+  fixtures/           sample documents; safe to delete before deploying
 ```
+
+Nothing under `test/` is served or precached, so the whole directory can be
+deleted before deploying.
+
+### Running the tests
+
+```bash
+node --test test/
+```
+
+Node is not a runtime dependency — the app itself still needs no toolchain —
+but `layout.js` is pure geometry, and it is the one file where a tuning
+constant can quietly ruin every document without throwing anything. The tests
+build page geometry by hand, one case per layout the XY-cut has to get right:
+tight two- and three-column measures, a full-width heading or footer crossing
+the gutter, a marginal note, list markers hanging in the margin, drop caps,
+and a paragraph running from the foot of one column to the head of the next.
 
 `vendor/` is about 56 MB, but only ~2.5 MB of it (the shell plus pdf.js) is
 precached on install. The OCR engine and its language model are the bulk, and

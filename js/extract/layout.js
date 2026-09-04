@@ -22,14 +22,37 @@
 
 const MAX_DEPTH = 14;
 
-// A gutter must be at least this many times the local font size to count.
+// A gutter this many times the local font size is taken as a gutter on width
+// alone, with no further questions asked.
 const V_GAP_MIN_EMS = 1.15;
-// A blank horizontal band must be at least this tall to cut on.
+// A narrower channel can still be a gutter, but only down to this width and
+// only if the evidence in isColumnGutter() supports it. Journals set columns
+// tighter than the width rule above allows: NEJM leaves 0.9 em.
+const V_GAP_EVIDENCE_EMS = 0.5;
+// A gutter must be at least this many times the region's ordinary word space.
+// The measure only exists when the source emits words rather than whole lines.
+const V_GAP_WORD_RATIO = 1.8;
+// Fraction of a side's lines that must line up on the gutter's edge.
+const V_EDGE_AGREEMENT = 0.55;
+// A narrow gutter must have text on both sides of it for this many lines of
+// whichever side has fewer.
+const V_MIN_COEXIST_LINES = 3;
+// A blank horizontal band must be this many times the local line pitch to cut
+// on, falling back to a multiple of the font size when there are too few lines
+// to measure a pitch.
+const H_GAP_MIN_PITCH = 0.7;
 const H_GAP_MIN_EMS = 0.95;
 // A region narrower than this fraction of the page cannot hold two columns.
 const V_MIN_REGION_W = 0.34;
-// Neither side of a vertical cut may be narrower than this fraction of a page.
+// Neither side of a vertical cut may be narrower than this fraction of a page,
+// unless it is a marginal block (see isMarginalBlock).
 const V_MIN_SIDE_W = 0.10;
+// A narrow side is a marginal block unless this fraction of its lines or more
+// sit on a baseline shared with the main side, which is what makes it a column
+// of line leaders rather than a block.
+const V_MARGIN_SHARED_ROWS = 0.75;
+// A drop cap is at least this many times the body size of its region.
+const DROP_CAP_MIN_SIZE = 1.7;
 // Header/footer band, as a fraction of page height.
 const MARGIN_BAND = 0.075;
 
@@ -71,25 +94,155 @@ function linePitch(atoms) {
   return median(gaps);
 }
 
-/** Widest uncovered interval along one axis, found by a sweep over the
+/** Every uncovered interval along one axis, found by a sweep over the
  *  projected atom extents. Edges are excluded: only interior gaps split. */
-function widestGap(intervals, minWidth) {
-  if (intervals.length < 2) return null;
+function gapsIn(intervals, minWidth) {
+  if (intervals.length < 2) return [];
   const sorted = [...intervals].sort((a, b) => a[0] - b[0]);
   let reach = sorted[0][1];
-  let best = null;
+  const out = [];
 
   for (let i = 1; i < sorted.length; i++) {
     const [s, e] = sorted[i];
     if (s > reach) {
       const width = s - reach;
-      if (width >= minWidth && (!best || width > best.width)) {
-        best = { at: reach + width / 2, width, before: reach, after: s };
+      if (width >= minWidth) {
+        out.push({ at: reach + width / 2, width, before: reach, after: s });
       }
     }
     if (e > reach) reach = e;
   }
+  return out;
+}
+
+/** The widest such interval, or null. */
+function widestGap(intervals, minWidth) {
+  let best = null;
+  for (const g of gapsIn(intervals, minWidth)) if (!best || g.width > best.width) best = g;
   return best;
+}
+
+/** Cluster atoms into baseline rows. Coarser than regionToLines: this only
+ *  needs to know which fragments sit on a line together, not what they say. */
+function baselineRows(atoms) {
+  const sorted = [...atoms].sort((a, b) => a.base - b.base);
+  const out = [];
+  let cur = null;
+  for (const a of sorted) {
+    if (cur && Math.abs(a.base - cur.base) <= 0.4 * (a.size || 10)) cur.atoms.push(a);
+    else { cur = { base: a.base, atoms: [a] }; out.push(cur); }
+  }
+  return out;
+}
+
+/** The region's ordinary word space, as the 90th percentile of the horizontal
+ *  gaps between neighbouring fragments on a line.
+ *
+ *  This is what a candidate gutter has to beat, so the candidate channels
+ *  themselves are excluded from the sample: in a two-column region the only
+ *  gap on most lines *is* the gutter, and measuring it against itself would
+ *  reject every real column.
+ *
+ *  Returns 0 unless the sample is dense enough to be about words at all: a
+ *  source that emits a whole line as one fragment yields a handful of gaps
+ *  across the region, and those are structural — the hole a dropped citation
+ *  marker leaves, the space before a mid-line heading — not word spaces. A
+ *  percentile of that sample measures nothing, and it lands near the width of
+ *  a real gutter, which would veto every column on the page. Such a source
+ *  cannot produce a false gutter from word spaces in the first place, since
+ *  its atoms cover the line. */
+function typicalWordGap(rows, bands) {
+  const gaps = [];
+  for (const r of rows) {
+    const a = [...r.atoms].sort((p, q) => p.x0 - q.x0);
+    for (let i = 1; i < a.length; i++) {
+      const from = a[i - 1].x1, to = a[i].x0;
+      if (to - from <= 0.05) continue;
+      if (bands.some(b => from < b.after && to > b.before)) continue;
+      gaps.push(to - from);
+    }
+  }
+  if (gaps.length < Math.max(8, 2 * rows.length)) return 0;
+  gaps.sort((p, q) => p - q);
+  return gaps[Math.floor(gaps.length * 0.9)];
+}
+
+/** Fraction of rows whose leading (or trailing) edge lands on `edge`.
+ *  A column has a straight edge along the gutter; a chance alignment of word
+ *  spaces does not. */
+function edgeAgreement(rows, edge, tol, side) {
+  let hits = 0;
+  for (const r of rows) {
+    const x = side === 'start'
+      ? Math.min(...r.atoms.map(a => a.x0))
+      : Math.max(...r.atoms.map(a => a.x1));
+    if (Math.abs(x - edge) <= tol) hits++;
+  }
+  return rows.length ? hits / rows.length : 0;
+}
+
+/** How far down the page the two sides of a gap run alongside each other,
+ *  in points. Used to rank cuts: a gutter running the height of the page
+ *  separates more than a nick beside a two-word note does. */
+function coexistHeight(left, right) {
+  const l = bbox(left), r = bbox(right);
+  return Math.min(l.bot, r.bot) - Math.max(l.top, r.top);
+}
+
+/** The same question asked as a count of lines, of whichever side has fewer.
+ *  Counting lines rather than measuring points is what lets a three-line
+ *  sidenote qualify next to a full column, while a gap that merely trails off
+ *  a single stray fragment still does not. */
+function coexistLines(left, right) {
+  const lr = baselineRows(left), rr = baselineRows(right);
+  const [few, many] = lr.length <= rr.length ? [lr, rr] : [rr, lr];
+  const span = bbox(many.flatMap(r => r.atoms));
+  return few.filter(r => r.base >= span.top && r.base <= span.bot).length;
+}
+
+/** Does a narrow side of a candidate cut stand on its own?
+ *
+ *  A sidenote, a pull quote or a journal's "Quick Take" box is a block in its
+ *  own right and belongs in its own region — spliced into the column beside
+ *  it, three words of it land in the middle of somebody's sentence. Numbers
+ *  hanging in the margin of a list, line numbers down the side of a
+ *  manuscript and drop caps are the opposite: each one sits on the baseline
+ *  of the line it introduces, and cutting them away would read every marker
+ *  first and the text they mark afterwards. Shared baselines tell them apart. */
+function isMarginalBlock(side, other) {
+  const mine = baselineRows(side);
+  if (!mine.length) return false;
+  const theirs = baselineRows(other);
+
+  let shared = 0;
+  for (const r of mine) {
+    const tol = 0.4 * (median(r.atoms.map(a => a.size)) || 10);
+    if (theirs.some(t => Math.abs(t.base - r.base) <= tol)) shared++;
+  }
+  return shared / mine.length < V_MARGIN_SHARED_ROWS;
+}
+
+/** Is this whitespace channel a column gutter?
+ *
+ *  Width alone settles the wide ones. Below that, journals routinely set
+ *  columns closer together than any width rule can safely accept — NEJM
+ *  leaves 0.9 em, less than the space either side of an em dash — so a
+ *  narrow channel has to earn it: it must be far wider than the region's own
+ *  word spacing, the columns it creates must run alongside each other for
+ *  several lines, and at least one of the two edges it cuts must be straight.
+ *  Prose that happens to leave a ragged hole satisfies none of those. */
+function isColumnGutter(gap, left, right, ctx) {
+  const { em, page, wordGap } = ctx;
+
+  if (gap.width >= Math.max(V_GAP_MIN_EMS * em, 0.018 * page.width)) return true;
+  if (gap.width < Math.max(V_GAP_EVIDENCE_EMS * em, 0.008 * page.width)) return false;
+  if (wordGap > 0 && gap.width < V_GAP_WORD_RATIO * wordGap) return false;
+
+  if (coexistLines(left, right) < V_MIN_COEXIST_LINES) return false;
+
+  const tol = Math.max(1.5, 0.2 * em);
+  return edgeAgreement(baselineRows(right), gap.after, tol, 'start') >= V_EDGE_AGREEMENT ||
+         edgeAgreement(baselineRows(left), gap.before, tol, 'end') >= V_EDGE_AGREEMENT;
 }
 
 /* ═══════════════════════════════════════════════════════════ XY-cut ═══ */
@@ -109,29 +262,49 @@ export function xyCut(atoms, page) {
 
     const box = bbox(group);
     const em = median(group.map(a => a.size)) || 10;
+    const pitch = linePitch(group);
 
     // ── vertical cut (columns) ────────────────────────────────────────
     // Guarded hard: a false gutter scrambles reading order far more badly
     // than a missed one, and short ragged-right paragraphs can easily leave
-    // a spurious column of whitespace.
+    // a spurious column of whitespace. But the guard belongs in what counts
+    // as a gutter, not in how many channels are looked at, so every candidate
+    // is examined: the widest channel on a page is not always the real
+    // gutter, and one that fails on side width must not take a narrower true
+    // gutter down with it.
     if (box.w >= V_MIN_REGION_W * page.width) {
-      const gap = widestGap(
+      const okSide = (s, other) => {
+        if (s.length < 3) return false;
+        if (bbox(s).w >= V_MIN_SIDE_W * page.width) return true;
+        return isMarginalBlock(s, other);
+      };
+
+      const candidates = gapsIn(
         group.map(a => [a.x0, a.x1]),
-        Math.max(V_GAP_MIN_EMS * em, 0.018 * page.width),
+        Math.max(V_GAP_EVIDENCE_EMS * em, 0.008 * page.width),
       );
-      if (gap) {
+      const ctx = { em, page, wordGap: typicalWordGap(baselineRows(group), candidates) };
+
+      let best = null;
+      for (const gap of candidates) {
         const left  = group.filter(a => a.x1 <= gap.at);
         const right = group.filter(a => a.x1 > gap.at);
-        const okSide = (s) => {
-          if (s.length < 3) return false;
-          const b = bbox(s);
-          return b.w >= V_MIN_SIDE_W * page.width;
-        };
-        if (okSide(left) && okSide(right)) {
-          recurse(left, depth + 1);
-          recurse(right, depth + 1);
-          return;
+        if (!okSide(left, right) || !okSide(right, left)) continue;
+        if (!isColumnGutter(gap, left, right, ctx)) continue;
+
+        // Rank by how much text the cut actually separates, so a gutter
+        // running the height of the page beats a nick between a marginal
+        // note and the body.
+        const score = coexistHeight(left, right);
+        if (!best || score > best.score || (score === best.score && gap.width > best.gap.width)) {
+          best = { gap, left, right, score };
         }
+      }
+
+      if (best) {
+        recurse(best.left, depth + 1);
+        recurse(best.right, depth + 1);
+        return;
       }
     }
 
@@ -139,10 +312,16 @@ export function xyCut(atoms, page) {
     // Only structural breaks matter here — separating a title from the body,
     // or a figure from its column. Ordinary paragraph spacing is handled
     // later by linesToBlocks, so a conservative threshold costs nothing.
-    const pitch = linePitch(group);
+    //
+    // Line pitch is the measure, not font size: what makes a band structural
+    // is that it is wider than this text's own leading, and only pitch knows
+    // what the leading is. The difference is not academic — a journal footer
+    // sits 0.8 em under the last line of a two-column abstract, and a font
+    // size threshold leaves it welded across both columns, where it covers
+    // the gutter and interleaves the whole page.
     const hgap = widestGap(
       group.map(a => [a.top, a.bot]),
-      Math.max(H_GAP_MIN_EMS * em, 0.7 * pitch),
+      pitch > 0 ? H_GAP_MIN_PITCH * pitch : H_GAP_MIN_EMS * em,
     );
     if (hgap) {
       const above = group.filter(a => a.bot <= hgap.at);
@@ -164,15 +343,56 @@ export function xyCut(atoms, page) {
 
 /* ═══════════════════════════════════════════════════════════ lines ════ */
 
+/** Find the drop caps in a region and the atom each one really precedes.
+ *
+ *  A drop cap is set two or three lines deep, so it rests on the baseline of
+ *  the *last* line it spans and baseline clustering files it there. Left
+ *  alone, this article opens "cute respiratory failure is the most common
+ *  cause of patient admission" and its "A" surfaces two lines later, welded
+ *  to the front of a word: "Ato an intensive care unit".
+ *
+ *  A big letter only counts as a drop cap if some smaller run starts flush
+ *  against it, on a baseline above its own but still inside its box. That is
+ *  what a paragraph wrapping around a cap looks like, and a heading — the
+ *  other reason for one large letter to be sitting on its own — never does.
+ *
+ *  @returns {{caps:Set<Object>, before:Map<Object,string>}}
+ */
+function dropCaps(atoms) {
+  const bodySize = median(atoms.map(a => a.size)) || 10;
+  const caps = new Set();
+  const before = new Map();
+
+  for (const a of atoms) {
+    if (a.size < DROP_CAP_MIN_SIZE * bodySize) continue;
+    if (a.text.trim().length > 2) continue;
+
+    let target = null;
+    for (const b of atoms) {
+      // Wrapped text: smaller, starting flush to the cap's right, on a
+      // baseline above the cap's own but no higher than the cap's own box.
+      if (b === a || b.size >= 0.7 * a.size) continue;
+      if (b.base <= a.top || b.base >= a.base - 0.5 * b.size) continue;
+      if (b.x0 < a.x1 - 1 || b.x0 > a.x1 + a.size) continue;
+      if (!target || b.base < target.base) target = b;
+    }
+    if (target) { caps.add(a); before.set(target, a.text.trim()); }
+  }
+  return { caps, before };
+}
+
 /** Cluster a region's atoms into lines by baseline, then order left to right.
  *  Superscript reference markers are detected here, while we still know the
  *  surrounding line's font size — after flattening to text it is too late. */
 function regionToLines(region, page, pageNum) {
-  const atoms = [...region.atoms].sort((a, b) => a.base - b.base || a.x0 - b.x0);
+  const sorted = [...region.atoms].sort((a, b) => a.base - b.base || a.x0 - b.x0);
+  const { caps, before } = dropCaps(sorted);
+
   const lines = [];
   let cur = null;
 
-  for (const a of atoms) {
+  for (const a of sorted) {
+    if (caps.has(a)) continue;
     if (!cur) { cur = { atoms: [a] }; continue; }
     const em = median(cur.atoms.map(x => x.size)) || a.size;
     // Superscripts sit high but belong to the line, so the tolerance is
@@ -186,6 +406,12 @@ function regionToLines(region, page, pageNum) {
   }
   if (cur) lines.push(cur);
 
+  for (const l of lines) {
+    for (const a of l.atoms) {
+      if (before.has(a)) { l.prefix = before.get(a); break; }
+    }
+  }
+
   return lines.map(l => finishLine(l, region, page, pageNum)).filter(Boolean);
 }
 
@@ -194,7 +420,7 @@ function finishLine(line, region, page, pageNum) {
   const bodySize = median(parts.map(p => p.size)) || 10;
   const baseline = median(parts.map(p => p.base));
 
-  let text = '';
+  let text = line.prefix || '';
   let dropped = 0;
 
   for (let i = 0; i < parts.length; i++) {
