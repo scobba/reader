@@ -37,6 +37,7 @@ export function buildScript(rawBlocks, opts) {
     skipCitations = true,
     skipRefs = true,
     skipCaptions = false,
+    skipTables = true,
     expandAbbrev = true,
     announceHeadings = true,
   } = opts || {};
@@ -94,17 +95,22 @@ export function buildScript(rawBlocks, opts) {
   blocks.forEach((b, blockIdx) => {
     b.first = sentences.length;
 
+    // `furniture` is set by the layout pass on blocks that came out of a
+    // table or the inside of a figure. Their captions never carry it, so
+    // "Table 1. Characteristics of the Participants at Baseline" is still
+    // read and you know there is something there to go back and look at.
     const structurallySkipped =
       (b.zone === 'references' && skipRefs) ||
       (b.zone === 'backmatter' && skipRefs) ||
-      (b.type === 'caption' && skipCaptions);
+      (b.type === 'caption' && skipCaptions) ||
+      (b.furniture && skipTables);
 
     const noise = isNoiseBlock(b.text, b.type) || isAcronymSoup(b.text);
 
     // Table rows are routinely mistaken for headings by the layout pass
     // ("method top-1 err. top-5 err."). Keeping them out of the outline is
     // what stops the section list filling up with table fragments.
-    if (b.type === 'heading' && !noise) {
+    if (b.type === 'heading' && !noise && !(b.furniture && skipTables)) {
       outline.push({
         title: b.text,
         level: b.level || 2,

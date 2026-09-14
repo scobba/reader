@@ -154,6 +154,36 @@ export async function importUrl(url, { onProgress, signal } = {}) {
   return doc;
 }
 
+/** Re-run extraction for a document already in the library, from the original
+ *  file kept at import.
+ *
+ *  Blocks are stored, not re-derived, so an improvement to the layout analyser
+ *  reaches a document only when this is run over it — the reading position and
+ *  rendered audio are keyed to the document and survive. */
+export async function reextract(docId, { onProgress, signal } = {}) {
+  const doc = await docs.get(docId);
+  if (!doc) throw new Error('Document not found');
+
+  const blob = await files.get(docId);
+  if (!blob) throw new Error('The original file is no longer stored for this document.');
+
+  // files.get hands back the blob without the name it was stored under, and
+  // the sniffer wants one for the formats it cannot recognise by magic bytes.
+  const res = await extractFile(blob, { name: doc.source || doc.title || '', onProgress, signal });
+  if (!res.blocks?.length) throw new Error('Could not find any readable text in that.');
+
+  const stats = summarise(res.blocks);
+  await content.put(docId, res.blocks);
+  await docs.put({
+    ...doc,
+    title: titleFrom(res.meta, doc.title),
+    words: stats.words,
+    minutes: stats.minutes,
+    needsOcr: res.needsOcr ?? doc.needsOcr,
+  });
+  return await docs.get(docId);
+}
+
 /** Re-run extraction through OCR for a document already in the library. */
 export async function reextractWithOcr(docId, { onProgress, signal } = {}) {
   const doc = await docs.get(docId);

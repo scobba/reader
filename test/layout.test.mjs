@@ -263,6 +263,202 @@ test('leaves ordinary prose alone', () => {
   }
 });
 
+/* ── tables and figures ───────────────────────────────────────────────── */
+
+/** Two columns of body prose, which is what sets the document's body size and
+ *  measure. Everything in this section is judged relative to them. */
+const BODY = [
+  ...column(62, 63, LEFT),
+  ...column(269, 63, RIGHT),
+];
+
+/** A table row: a label and a value with a cell's worth of space between. */
+function row(label, value, base, x0 = 49) {
+  const w = label.length * 4;
+  return [atom(label, x0, base, 8, w), atom(value, 160, base, 8, 40)];
+}
+
+const kinds = (blocks) => blocks.map(b => b.furniture || 'keep');
+
+test('marks a table by the cells in its rows, and leaves its caption alone', () => {
+  // Labels of differing lengths, so the space between the columns is broken
+  // up rather than running the height of the table as a gutter would.
+  const table = [
+    atom('Table 1. Characteristics of the Participants at Baseline.', 37, 67, 8, 183),
+    ...row('Age', '56.7', 110),
+    ...row('Sex — no. (%)', '667 (69.1)', 124),
+    ...row('Male', '298 (30.9)', 138),
+    ...row('Female, and those without', '19 (2.0)', 152),
+    ...row('White', '832 (86.2)', 166),
+  ];
+  const blocks = linesToBlocks([
+    ...pageLines(BODY, PAGE, 1),
+    ...pageLines(table, PAGE, 2),
+  ]);
+
+  const onPage2 = blocks.filter(b => b.page === 2);
+  assert.equal(onPage2[0].type, 'caption');
+  assert.equal(onPage2[0].furniture, undefined, 'the caption is how you know the table is there');
+  assert.ok(onPage2.slice(1).every(b => b.furniture === 'table'), kinds(onPage2).join(','));
+});
+
+test('leaves body prose unmarked', () => {
+  const blocks = linesToBlocks(pageLines(BODY, PAGE, 1));
+  assert.deepEqual([...new Set(kinds(blocks))], ['keep']);
+});
+
+test('marks the boxes inside a flow diagram', () => {
+  // Small type, laid out to its own width rather than the body measure, and
+  // never finishing a sentence — a CONSORT diagram, box by box.
+  const figure = [
+    ...column(209, 88, ['5762 Patients were assessed for eligibility'], { size: 7, pitch: 8, measure: 120 }),
+    ...column(349, 94, ['3806 Were excluded', '2794 Did not meet eligibility criteria',
+                        '509 Declined to participate'], { size: 7, pitch: 8, measure: 122 }),
+    ...column(98, 187, ['978 Were assigned to receive carbocisteine',
+                        '486 Were assigned to carbocisteine alone'], { size: 7, pitch: 8, measure: 161 }),
+  ];
+  const blocks = linesToBlocks([
+    ...pageLines(BODY, PAGE, 1),
+    ...pageLines(figure, PAGE, 2),
+  ]);
+
+  const onPage2 = blocks.filter(b => b.page === 2);
+  assert.ok(onPage2.length > 0);
+  assert.ok(onPage2.every(b => b.furniture === 'figure'), kinds(onPage2).join(','));
+});
+
+test('keeps a figure legend, which is prose about the figure', () => {
+  // Small type like the diagram, but written in sentences and set close to
+  // the body measure. It is the only description a listener gets.
+  const legend = column(62, 63, [
+    'Figure 1 (facing page). Screening, Randomization, and Assessment.',
+    'Panel A shows the flow diagram for the any carbocisteine and no',
+    'carbocisteine comparison groups, and Panel B shows the flow diagram',
+    'for the any hypertonic saline comparison groups.',
+  ], { size: 8, pitch: 10, measure: 183 });
+
+  const blocks = linesToBlocks([
+    ...pageLines(BODY, PAGE, 1),
+    ...pageLines(legend, PAGE, 2),
+  ]);
+  assert.ok(blocks.filter(b => b.page === 2).every(b => !b.furniture));
+});
+
+test('a heading ends a table, whatever size it is set in', () => {
+  // Journals set subsection heads smaller than body text, so size alone
+  // cannot tell "Safety Outcomes" from another row of the table above it.
+  // Being a heading is what ends the table — here, by being bold.
+  const head = atom('Safety Outcomes', 62, 150, 9, 70);
+  head.bold = true;
+  const page = [
+    atom('Table 2. Adverse events during the trial.', 62, 67, 8, 183),
+    ...row('Bleeding', '13 (1.4)', 110, 62),
+    head,
+    ...column(62, 170, LEFT, { size: 10 }),
+  ];
+  const blocks = linesToBlocks([...pageLines(BODY, PAGE, 1), ...pageLines(page, PAGE, 2)]);
+  const safety = blocks.find(b => b.text.startsWith('Safety Outcomes'));
+
+  assert.ok(safety, 'the heading survived');
+  assert.equal(safety.type, 'heading');
+  assert.equal(safety.furniture, undefined);
+  // And the body text after it is back out of the table too.
+  assert.ok(blocks.filter(b => b.page === 2 && b.text.startsWith('to carbocisteine'))
+                  .every(b => !b.furniture));
+});
+
+test('a bare "Table 2." is a cross-reference, not a caption', () => {
+  // The stub left where the table itself sits on the facing page. Opening a
+  // table run on it would swallow the body text that follows.
+  const page = [
+    atom('Table 2.', 62, 67, 10, 40),
+    atom('Safety Outcomes', 62, 90, 9, 70),
+    ...column(62, 110, LEFT, { size: 10 }),
+  ];
+  const blocks = linesToBlocks([...pageLines(BODY, PAGE, 1), ...pageLines(page, PAGE, 2)]);
+  assert.ok(blocks.filter(b => b.page === 2).every(b => !b.furniture), kinds(blocks).join(','));
+});
+
+test('a line is the size most of its characters are, not its median run', () => {
+  // An author list carries a superscript affiliation marker after every name,
+  // so by count half the runs on the line are tiny digits. The median run
+  // measures 7.9pt where the line is plainly 10pt type — and line size is
+  // what heading detection, the title picker and the table run all read.
+  const names = ['B. Connolly,', 'N. Dickson,', 'C. Campbell,', 'J.M. Bradley,'];
+  const authors = [];
+  let x = 67;
+  for (const n of names) {
+    authors.push(atom(n, x, 174, 10, n.length * 4.2));
+    x += n.length * 4.2;
+    authors.push(atom('12', x, 171, 5.8, 6));     // the marker
+    x += 8;
+  }
+
+  const [line] = pageLines(authors, PAGE, 2);
+  assert.equal(line.size, 10);
+
+  const blocks = linesToBlocks([...pageLines(BODY, PAGE, 1), ...pageLines(authors, PAGE, 2)]);
+  assert.ok(blocks.filter(b => b.page === 2).every(b => !b.furniture), kinds(blocks).join(','));
+});
+
+test('cells alone mark a table, with no caption to go on', () => {
+  // Nothing here says "Table" — the rows have to give themselves away.
+  const table = [
+    ...row('Age', '56.7', 110),
+    ...row('Sex — no. (%)', '667 (69.1)', 124),
+    ...row('Male', '298 (30.9)', 138),
+    ...row('Female, and those without', '19 (2.0)', 152),
+  ];
+  const blocks = linesToBlocks([...pageLines(BODY, PAGE, 1), ...pageLines(table, PAGE, 2)]);
+  const onPage2 = blocks.filter(b => b.page === 2);
+
+  assert.ok(onPage2.length > 0);
+  assert.ok(onPage2.every(b => b.furniture === 'table'), kinds(onPage2).join(','));
+});
+
+test('the caption carries the table over rows that have no cells in them', () => {
+  // A column of row labels is just short lines, and the footnote under it is
+  // an ordinary sentence. Only the caption above says what they belong to.
+  const table = [
+    atom('Table 3. Type of humidification.', 37, 67, 8, 183),
+    atom('Heated humidification', 49, 90, 8, 80),
+    atom('Heat moisture exchange', 49, 104, 8, 86),
+    atom('Other', 49, 118, 8, 24),
+    atom('* Plus–minus values are means ±SD.', 37, 132, 8, 140),
+  ];
+  const blocks = linesToBlocks([...pageLines(BODY, PAGE, 1), ...pageLines(table, PAGE, 2)]);
+  const onPage2 = blocks.filter(b => b.page === 2);
+
+  assert.equal(onPage2[0].type, 'caption');
+  assert.equal(onPage2[0].furniture, undefined);
+  assert.ok(onPage2.slice(1).every(b => b.furniture === 'table'), kinds(onPage2).join(','));
+});
+
+test('a bare "Table 4." does not carry off the prose beneath it', () => {
+  const page = [
+    atom('Table 4.', 62, 67, 10, 40),
+    atom('Adherence was high in all four groups over the whole', 62, 90, 8, 150),
+    atom('28-day treatment period of the trial.', 62, 104, 8, 110),
+  ];
+  const blocks = linesToBlocks([...pageLines(BODY, PAGE, 1), ...pageLines(page, PAGE, 2)]);
+  assert.ok(blocks.filter(b => b.page === 2).every(b => !b.furniture),
+            kinds(blocks.filter(b => b.page === 2)).join(','));
+});
+
+test('body-size blocks are never figure innards, however they are laid out', () => {
+  // Three short, unpunctuated, off-measure regions — everything a diagram box
+  // looks like except the one thing that matters, which is being small.
+  // No full stops anywhere: the sentence test must not be what saves them.
+  const page = [
+    ...column(62, 70,  ['Trial sites and', 'investigators'], { size: 10, pitch: 13, measure: 110 }),
+    ...column(62, 150, ['Recruitment by', 'region'], { size: 10, pitch: 13, measure: 105 }),
+    ...column(62, 230, ['Outcomes assessed', 'centrally'], { size: 10, pitch: 13, measure: 118 }),
+  ];
+  const blocks = linesToBlocks([...pageLines(BODY, PAGE, 1), ...pageLines(page, PAGE, 2)]);
+  assert.ok(blocks.filter(b => b.page === 2).every(b => !b.furniture),
+            kinds(blocks.filter(b => b.page === 2)).join(','));
+});
+
 /* ── paragraph assembly ───────────────────────────────────────────────── */
 
 test('stitches a paragraph running from one column into the next', () => {

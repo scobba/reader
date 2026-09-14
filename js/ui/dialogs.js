@@ -1,6 +1,6 @@
 import { settings, affectsText } from '../core/settings.js';
 import { docs, audio as audioStore, usage, wipe } from '../core/db.js';
-import { importFile, importPasted, importUrl, reextractWithOcr } from '../core/ingest.js';
+import { importFile, importPasted, importUrl, reextractWithOcr, reextract } from '../core/ingest.js';
 import { availableEngines, activeEngine, setActiveEngine } from '../tts/manager.js';
 import { player } from '../core/player.js';
 import { APP_VERSION } from '../config.js';
@@ -153,6 +153,7 @@ export function initDialogs({ refreshLibrary, openDoc, getCurrent, rebuildScript
     bindCheck('set-skip-citations', 'skipCitations');
     bindCheck('set-skip-refs', 'skipRefs');
     bindCheck('set-skip-captions', 'skipCaptions');
+    bindCheck('set-skip-tables', 'skipTables');
     bindCheck('set-expand-abbrev', 'expandAbbrev');
     bindCheck('set-announce-headings', 'announceHeadings');
     bindCheck('set-keep-awake', 'keepAwake');
@@ -205,6 +206,7 @@ export function initDialogs({ refreshLibrary, openDoc, getCurrent, rebuildScript
     check('set-skip-citations', s.skipCitations);
     check('set-skip-refs', s.skipRefs);
     check('set-skip-captions', s.skipCaptions);
+    check('set-skip-tables', s.skipTables);
     check('set-expand-abbrev', s.expandAbbrev);
     check('set-announce-headings', s.announceHeadings);
     check('set-keep-awake', s.keepAwake);
@@ -421,6 +423,20 @@ export function initDialogs({ refreshLibrary, openDoc, getCurrent, rebuildScript
       dlgMenu.close();
       player.goto(0, { autoplay: false });
       toast('Back to the beginning');
+    };
+
+    document.getElementById('mi-reextract').onclick = async () => {
+      dlgMenu.close();
+      const cur = getCurrent();
+      if (!cur) return;
+      player.pause();
+      try {
+        const doc = await withBusy('Re-extracting', ({ signal, onProgress }) =>
+          reextract(cur.doc.id, { signal, onProgress }));
+        await refreshLibrary();
+        openDoc(doc.id);
+        toast('Re-extracted');
+      } catch (e) { fail(e); }
     };
 
     document.getElementById('mi-ocr').onclick = async () => {

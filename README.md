@@ -129,10 +129,25 @@ the head of the paragraph they open — a cap set three lines deep otherwise
 rests on the last of them, and the article starts "cute respiratory failure" —
 rejoins letter-spaced section heads, since journals track them wide enough
 that pdf.js reads the gaps as spaces and "Methods" arrives as "Me thods",
+marks the regions that are tables or the insides of figures so they can be
+left out of the reading,
 merges lines into paragraphs using gap, indent and short-line-ending signals,
 drops superscript citation markers while it still knows the surrounding font
 size, and removes running heads and footers by finding lines that repeat
 across pages.
+
+Tables and figures are found by region rather than line by line, because line
+by line there is nothing to find: "Male 667 (69.1)" is ordinary words and
+numbers. A table row has cells, and a cell leaves a gap in the middle of a line
+far wider than a word space — across the body pages of a journal article the
+widest gap inside a line runs about a tenth of an em, where a table row runs
+five. A table's row labels and its footnotes have no cells, so the caption
+carries the marking over everything below it that is still set smaller than the
+body, until a heading or body-size text ends the run. A figure has no tell at
+all — its boxes are each their own region of perfectly ordinary short lines —
+so they are found by what they are not: smaller than the body text, laid out to
+something other than the body measure, never finishing a sentence, and several
+of them together on one page.
 
 Scanned pages have no text layer at all, so they go through Tesseract instead —
 and the OCR word boxes are fed through *the same* pipeline, because a scanned
@@ -190,6 +205,10 @@ the original file.
   Copy, and use the **Paste** tab. That always works.
 - **Tap any sentence** to start reading from there.
 - **Jump to section** in the document menu navigates by heading.
+- **Re-extract text** in the document menu reads the original file again with
+  the current layout analysis. Blocks are stored rather than re-derived, so an
+  improvement to the extractor reaches a document you already added only when
+  you run this over it. Your place in the document is kept.
 - **Scanned PDF?** If the import says there is no text layer, open it and choose
   **Re-extract with OCR**. It runs entirely on the device, and it is genuinely
   slow: tens of seconds per page on a phone, and the first run also pulls in a
@@ -262,8 +281,8 @@ constant can quietly ruin every document without throwing anything. The tests
 build page geometry by hand, one case per layout the XY-cut has to get right:
 tight two- and three-column measures, a full-width heading or footer crossing
 the gutter, a marginal note, list markers hanging in the margin, drop caps,
-letter-spaced section heads, and a paragraph running from the foot of one
-column to the head of the next.
+letter-spaced section heads, tables and the insides of figures, and a paragraph
+running from the foot of one column to the head of the next.
 
 `vendor/` is about 56 MB, but only ~2.5 MB of it (the shell plus pdf.js) is
 precached on install. The OCR engine and its language model are the bulk, and
@@ -286,9 +305,13 @@ powershell -ExecutionPolicy Bypass -File tools\vendor.ps1 -Force
 - **Pause restarts the current sentence** rather than resuming mid-word.
   Safari's `speechSynthesis.resume()` frequently never fires; restarting a
   sentence capped at ~300 characters is predictable and always works.
-- **Tables read poorly.** Most are detected and skipped, but a table laid out
-  so it looks like prose will be read as prose. There is no good way to speak
-  a table aloud anyway.
+- **Tables and figures are left out**, which is the point — read aloud they
+  come out as confetti, and there is no good way to speak a table. The caption
+  is still read, so you know what to go back and look at. What can still slip
+  through is a subsection heading set smaller than the body text and sitting
+  alone in a region of its own directly under a table caption: nothing in the
+  geometry separates that from one more row of row labels. Turn the setting
+  off if a document reads short.
 - **OCR on a phone is slow.** Keep the app in the foreground while it runs;
   browsers throttle background tabs hard enough to stall it almost completely.
 - **Scanned handwriting** will not work. Tesseract is for printed text.

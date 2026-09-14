@@ -13,6 +13,7 @@ const DEFAULTS = {
   skipCitations: true,
   skipRefs: true,
   skipCaptions: false,
+  skipTables: true,
   expandAbbrev: true,
   announceHeadings: true,
 
@@ -75,7 +76,8 @@ function emit(keys) {
 /** The subset that changes how text is turned into speech. When any of these
  *  change, the sentence list has to be rebuilt. */
 export const TEXT_KEYS = [
-  'skipCitations', 'skipRefs', 'skipCaptions', 'expandAbbrev', 'announceHeadings',
+  'skipCitations', 'skipRefs', 'skipCaptions', 'skipTables', 'expandAbbrev',
+  'announceHeadings',
 ];
 
 export function affectsText(keys) {

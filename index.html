@@ -194,6 +194,10 @@
       <span><b>Skip the reference list</b><small>Stops before References, Bibliography and other back matter.</small></span>
     </label>
     <label class="switch">
+      <input type="checkbox" id="set-skip-tables" checked>
+      <span><b>Skip tables and figures</b><small>Read aloud, a table comes out as “Male 667 69.1 Female 298 30.9” and a flow diagram as a list of stray numbers. The captions are still read, so you know what to go back and look at.</small></span>
+    </label>
+    <label class="switch">
       <input type="checkbox" id="set-skip-captions">
       <span><b>Skip figure and table captions</b><small>They interrupt the flow of the body text.</small></span>
     </label>
@@ -262,6 +266,7 @@
     <button class="menu-item" id="mi-outline"><b>Jump to section</b><small>Navigate by heading</small></button>
     <button class="menu-item" id="mi-restart"><b>Start from the beginning</b><small>Reset the saved position</small></button>
     <button class="menu-item" id="mi-prepare"><b>Prepare offline audio</b><small>Render the whole document with the neural voice and store it</small></button>
+    <button class="menu-item" id="mi-reextract"><b>Re-extract text</b><small>Reads the original file again with the current layout analysis</small></button>
     <button class="menu-item" id="mi-ocr"><b>Re-extract with OCR</b><small>For scanned pages where the text came out wrong</small></button>
     <button class="menu-item danger" id="mi-delete"><b>Delete document</b><small>Removes it from this device</small></button>
   </div>

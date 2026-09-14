@@ -53,6 +53,20 @@ const V_MIN_SIDE_W = 0.10;
 const V_MARGIN_SHARED_ROWS = 0.75;
 // A drop cap is at least this many times the body size of its region.
 const DROP_CAP_MIN_SIZE = 1.7;
+// A gap this wide inside a line separates cells, not words.
+const CELL_GAP_EMS = 1.5;
+// A region is a table once this fraction of its lines have cells in them.
+const TABLE_LINE_FRAC = 0.34;
+// Within a table run, "still smaller than the body" means at most this.
+const TABLE_RUN_MAX_SIZE = 0.95;
+// The inside of a figure is set smaller than the body text, and laid out to
+// something other than the body measure — narrower for a box in a diagram,
+// wider for a footnote running under a table.
+const FURNITURE_MAX_SIZE = 0.9;
+const FURNITURE_MEASURE_DEV = 0.15;
+// And it comes in groups. One small block on a page of prose is a sidenote, a
+// stray label or a subsection head — a diagram is a page of boxes.
+const FIGURE_MIN_REGIONS = 3;
 // Header/footer band, as a fraction of page height.
 const MARGIN_BAND = 0.075;
 
@@ -459,13 +473,32 @@ function repairTracked(text) {
   return out.join(' ');
 }
 
+/** The size a line is actually set in: the one most of its characters use.
+ *
+ *  The median run is not it. An author list carrying a superscript affiliation
+ *  marker after every name is half short runs of tiny digits by count, so its
+ *  median run measures 7.9pt where the line is plainly 10pt type — enough to
+ *  have it mistaken for the inside of a figure. */
+function dominantSize(parts) {
+  const weight = new Map();
+  for (const p of parts) {
+    const k = Math.round(p.size * 2) / 2;
+    weight.set(k, (weight.get(k) || 0) + (p.text.trim().length || 1));
+  }
+  let best = 0, heaviest = -1;
+  for (const [k, w] of weight) if (w > heaviest) { heaviest = w; best = k; }
+  return best;
+}
+
 function finishLine(line, region, page, pageNum) {
   const parts = [...line.atoms].sort((a, b) => a.x0 - b.x0);
-  const bodySize = median(parts.map(p => p.size)) || 10;
+  const bodySize = dominantSize(parts) || 10;
   const baseline = median(parts.map(p => p.base));
 
   let text = line.prefix || '';
   let dropped = 0;
+  let gapMax = 0;      // widest space inside the line
+  let gapAt = 0;       // and where it starts
 
   for (let i = 0; i < parts.length; i++) {
     const p = parts[i];
@@ -482,6 +515,7 @@ function finishLine(line, region, page, pageNum) {
     if (text) {
       const prev = parts[i - 1];
       const gap = p.x0 - (prev ? prev.x1 : p.x0);
+      if (gap > gapMax) { gapMax = gap; gapAt = prev ? prev.x1 : p.x0; }
       const needsSpace = gap > 0.20 * bodySize;
       if (needsSpace && !/\s$/.test(text) && !/^\s/.test(p.text)) text += ' ';
     }
@@ -502,6 +536,8 @@ function finishLine(line, region, page, pageNum) {
     x0: box.x0, x1: box.x1, top: box.top, bot: box.bot,
     bold,
     page: pageNum,
+    gapMax: gapMax / bodySize,   // in ems, so it compares across sizes
+    gapAt,
     col: { left: region.box.x0, right: region.box.x1, width: region.box.w },
     inTopBand: box.top < page.height * MARGIN_BAND,
     inBotBand: box.bot > page.height * (1 - MARGIN_BAND),
@@ -509,13 +545,23 @@ function finishLine(line, region, page, pageNum) {
   };
 }
 
-/** Full page: atoms in, ordered lines out. */
+/** Full page: atoms in, ordered lines out.
+ *
+ *  Each line remembers which region it came from. A table row or a box in a
+ *  flow diagram is not recognisable on its own — "Male 667 (69.1)" is a
+ *  sentence fragment like any other — but the region it sits in is, and that
+ *  is what linesToBlocks classifies. */
 export function pageLines(atoms, page, pageNum) {
   const usable = atoms.filter(a => a.text && a.text.trim());
   if (!usable.length) return [];
   const regions = xyCut(usable, page);
   const lines = [];
-  for (const r of regions) lines.push(...regionToLines(r, page, pageNum));
+  regions.forEach((r, i) => {
+    for (const line of regionToLines(r, page, pageNum)) {
+      line.region = `${pageNum}:${i}`;
+      lines.push(line);
+    }
+  });
   return lines;
 }
 
@@ -595,6 +641,91 @@ function joinWrapped(a, b) {
   return a + ' ' + b;
 }
 
+/** Classify each region as a table, the inside of a figure, or prose.
+ *
+ *  Read aloud, a table and a flow diagram come out as confetti — "Male 667
+ *  69.1 Female 298 30.9", "5762 Patients were assessed for eligibility 1956
+ *  Underwent randomization" — and a listener has no picture to hang any of it
+ *  on. Neither is recognisable line by line, though: every one of those
+ *  fragments is ordinary words and numbers. What gives them away is the shape
+ *  of the region they sit in.
+ *
+ *  A table row has cells, and cells leave a gap far wider than a word space
+ *  in the middle of the line. Prose never does: across the body pages of a
+ *  journal article the widest gap inside a line runs about a tenth of an em,
+ *  where a table row runs five.
+ *
+ *  A figure has no such tell — its boxes each come out as their own little
+ *  region of perfectly ordinary short lines. So they are identified by what
+ *  they are not: set smaller than the body text, laid out to something other
+ *  than the body measure, and never finishing a sentence. A paragraph of
+ *  prose fails all three, since it is set at body size and fills its column.
+ *
+ *  Headings are exempt from all of this, in linesToBlocks. A subsection head
+ *  is short, unpunctuated, set smaller than the body in most journals, and
+ *  sits in a region of its own whenever there is air above and below it —
+ *  which is to say it looks exactly like a box in a diagram, and is not one.
+ *
+ *  @returns {Map<string, 'table'|'figure'>} keyed by line.region
+ */
+function classifyRegions(lines, bodySize) {
+  // The measure most of the document's text is set to. A figure's boxes are
+  // narrower than this; a column of prose is exactly this.
+  const widths = new Map();
+  for (const l of lines) {
+    const k = Math.round((l.col?.width || 0) / 4) * 4;
+    widths.set(k, (widths.get(k) || 0) + l.text.length);
+  }
+  let measure = 0, heaviest = -1;
+  for (const [k, w] of widths) if (w > heaviest) { heaviest = w; measure = k; }
+
+  const byRegion = new Map();
+  for (const l of lines) {
+    if (!l.region) continue;
+    if (!byRegion.has(l.region)) byRegion.set(l.region, []);
+    byRegion.get(l.region).push(l);
+  }
+
+  const kinds = new Map();
+  const candidates = [];
+  for (const [key, ls] of byRegion) {
+    const celled = ls.filter(l => l.gapMax >= CELL_GAP_EMS).length;
+    if (ls.length >= 2 && celled / ls.length >= TABLE_LINE_FRAC) {
+      kinds.set(key, 'table');
+      continue;
+    }
+
+    const size = median(ls.map(l => l.size)) || bodySize;
+    const width = ls[0].col?.width ?? measure;
+    const offMeasure = measure > 0 &&
+      Math.abs(width - measure) / measure > FURNITURE_MEASURE_DEV;
+    // One finished sentence anywhere in the region is enough to call it prose.
+    // It is what keeps a sidenote or a figure legend — small type, narrow
+    // column, but written in sentences — out of this.
+    const finishesASentence = ls.some(l => /[.!?]["\'’”)\]]?$/.test(l.text));
+
+    if (!finishesASentence && offMeasure && size <= FURNITURE_MAX_SIZE * bodySize) {
+      candidates.push(key);
+    }
+  }
+
+  // Only where there are enough of them together to be a diagram. A lone
+  // candidate is far more likely to be a subsection head with air around it,
+  // which has every one of the same properties and is not furniture at all.
+  const perPage = new Map();
+  for (const key of candidates) {
+    const page = key.slice(0, key.indexOf(':'));
+    perPage.set(page, (perPage.get(page) || 0) + 1);
+  }
+  for (const key of candidates) {
+    if (perPage.get(key.slice(0, key.indexOf(':'))) >= FIGURE_MIN_REGIONS) {
+      kinds.set(key, 'figure');
+    }
+  }
+
+  return kinds;
+}
+
 /**
  * Merge ordered lines into typed blocks.
  *
@@ -602,8 +733,13 @@ function joinWrapped(a, b) {
  * speak the text, but it is the only thing that says which of the large lines
  * on a title page is the title.
  *
+ * `furniture` marks a block as belonging to a table or the inside of a
+ * figure, so the script builder can leave it out. Captions never carry it:
+ * hearing "Table 1. Characteristics of the Participants at Baseline" is how
+ * you know there is a table there to go back and look at.
+ *
  * @returns {Array<{type:'heading'|'para'|'caption', text:string, page:number,
- *                  size:number, level?:number}>}
+ *                  size:number, level?:number, furniture?:'table'|'figure'}>}
  */
 export function linesToBlocks(lines) {
   if (!lines.length) return [];
@@ -616,6 +752,8 @@ export function linesToBlocks(lines) {
   }
   let bodySize = 10, bestW = -1;
   for (const [k, w] of weight) if (w > bestW) { bestW = w; bodySize = k; }
+
+  const regionKind = classifyRegions(lines, bodySize);
 
   // Baseline-to-baseline distance for normal body leading. Measuring the step
   // between lines rather than the visual gap between their boxes makes the
@@ -711,14 +849,61 @@ export function linesToBlocks(lines) {
         page: l.page,
         size: l.size,
       };
+      // A caption sits inside the table it introduces, and is the one part of
+      // it worth hearing, so it never picks the marking up.
+      const kind = regionKind.get(l.region);
+      if (kind && cur.type !== 'caption') cur.furniture = kind;
     } else {
       cur.text = joinWrapped(cur.text, l.text);
+      // A paragraph stitched across a column break can start in prose and run
+      // into a table; if any of it is furniture, all of it reads as furniture.
+      const kind = regionKind.get(l.region);
+      if (kind && cur.type !== 'caption') cur.furniture = kind;
     }
     prev = l;
   }
   flush();
 
+  markTableRuns(blocks, bodySize);
+
   return blocks;
+}
+
+// A caption, not a cross-reference: there has to be a title after the label.
+// A bare "Table 2." is the stub left where a table sits on the facing page,
+// and opening a run on it swallows whatever body text follows.
+const TABLE_CAPTION = /^\s*(table|tabla|tableau)\s*\d+\s*[.:)\u2014-]?\s+\S/i;
+
+/** Extend each table caption over the table it introduces.
+ *
+ *  Region shape catches the grid itself, but not everything a table is made
+ *  of: a column of row labels is just short lines, and the footnotes under it
+ *  are ordinary sentences that would pass for prose anywhere else. What the
+ *  whole apparatus has in common is that it is set smaller than the body and
+ *  it starts at the caption — so the caption opens the run and the return to
+ *  body size closes it. A page break closes it too, since a table continued
+ *  overleaf is captioned again ("Table 1. (Continued.)").
+ *
+ *  Figure captions deliberately do not do this. What follows one is the
+ *  legend, which is written in sentences and is the only description of the
+ *  figure a listener gets. */
+function markTableRuns(blocks, bodySize) {
+  let runPage = null;
+
+  for (const b of blocks) {
+    if (runPage !== null && b.page !== runPage) runPage = null;
+
+    if (b.type === 'caption' && TABLE_CAPTION.test(b.text)) { runPage = b.page; continue; }
+    if (runPage === null) continue;
+
+    // A heading is the document's structure resuming, whatever size it is
+    // set in. Journals set their subsection heads smaller than body text, so
+    // without this a "Safety Outcomes" following a table caption is read as
+    // part of the table and disappears.
+    if (b.type === 'heading') { runPage = null; continue; }
+    if (!(b.size <= bodySize * TABLE_RUN_MAX_SIZE)) { runPage = null; continue; }
+    if (b.type !== 'caption') b.furniture = b.furniture || 'table';
+  }
 }
 
 /** Heuristic for "this page had no usable text layer".
