@@ -53,6 +53,7 @@ export class PiperEngine extends Engine {
   #pending = new Map();
   #storedVoices = null;
   #priming = new Set();
+  #inflight = new Map();
   #queue = Promise.resolve();
 
   get description() {
@@ -185,25 +186,44 @@ export class PiperEngine extends Engine {
     return `${docId || 'x'}:${hash(text)}:${voiceId}`;
   }
 
-  async #render(text, voiceId, docId, signal) {
+  /** Render one sentence, or join the render already running for it.
+   *
+   *  Sharing the in-flight job is what stops the lookahead and the sentence
+   *  being played from synthesising the same text twice: after a jump, the
+   *  player primes ahead and then immediately asks for a sentence the prime
+   *  has only just started, and rendering it a second time costs another few
+   *  seconds of silence for audio we are already making. */
+  #render(text, voiceId, docId, signal) {
     const key = this.#key(text, voiceId, docId);
 
+    let job = this.#inflight.get(key);
+    if (!job) {
+      job = this.#renderNow(key, text, voiceId, docId);
+      this.#inflight.set(key, job);
+      job.catch(() => {}).then(() => { this.#inflight.delete(key); });
+    }
+    // A waiter giving up must not cancel the render: the audio is still worth
+    // having, and whoever else is waiting on it still wants it.
+    return signal ? untilAborted(job, signal) : job;
+  }
+
+  async #renderNow(key, text, voiceId, docId) {
     const cached = await audioStore.get(key).catch(() => null);
     if (cached) return cached;
-    if (signal?.aborted) throw abortError();
 
     // One model, one session: serialise so lookahead rendering and the
     // sentence being played do not interleave and thrash the runtime.
-    const blob = await (this.#queue = this.#queue.then(async () => {
-      if (signal?.aborted) throw abortError();
+    const run = this.#queue.then(async () => {
       const { buf, type } = await this.#call('predict', { text, voiceId });
       return new Blob([buf], { type: type || 'audio/wav' });
-    }).catch((err) => {
-      // Keep the chain alive; a single failed sentence must not wedge the rest.
-      this.#queue = Promise.resolve();
-      throw err;
-    }));
+    });
+    // What the next render queues behind is deliberately a promise that always
+    // resolves. Chaining on `run` itself would hand a rejected promise to
+    // whatever is queued next, so one failed sentence would take the rest of
+    // the document down with it.
+    this.#queue = run.then(() => {}, () => {});
 
+    const blob = await run;
     audioStore.put(key, docId || 'x', blob).catch(() => { /* quota; not fatal */ });
     return blob;
   }
@@ -265,6 +285,7 @@ export class PiperEngine extends Engine {
   async dispose() {
     this.cancel();
     this.#priming.clear();
+    this.#inflight.clear();
     try { this.#worker?.terminate(); } catch { /* already gone */ }
     this.#worker = null;
     this.#ready = null;
@@ -272,5 +293,18 @@ export class PiperEngine extends Engine {
 }
 
 const fmtMB = (n) => `${((n || 0) / 1048576).toFixed(1)} MB`;
+
+/** Wait on `job`, but give up the moment `signal` aborts — without cancelling
+ *  it, and without leaving a listener behind on a signal that lives for the
+ *  whole of a play session. */
+function untilAborted(job, signal) {
+  if (signal.aborted) return Promise.reject(abortError());
+  return new Promise((resolve, reject) => {
+    const onAbort = () => reject(abortError());
+    signal.addEventListener('abort', onAbort, { once: true });
+    const settle = (fn) => (v) => { signal.removeEventListener('abort', onAbort); fn(v); };
+    job.then(settle(resolve), settle(reject));
+  });
+}
 
 register(PiperEngine);

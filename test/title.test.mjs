@@ -1,6 +1,6 @@
 /* Which line of a title page is the title.
  *
- *   node --test test/
+ *   node --test
  *
  * This only runs when the PDF's own metadata is missing or junk, which is
  * most of the time — an embedded title is very often the InDesign filename.

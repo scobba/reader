@@ -176,11 +176,43 @@ function b(e, m, n) {
   return i.buffer;
 }
 let h, _;
+/* mr-patch: keep the loaded voice between sentences.
+ *
+ * Upstream re-reads the 63 MB .onnx out of OPFS and builds a brand new
+ * InferenceSession on every predict() call, and never releases it. The
+ * onnxruntime WASM heap is a process-wide singleton that only grows, so a few
+ * sentences in - about half a minute of listening - the tab is holding several
+ * hundred megabytes and the browser kills it. On a phone that reads as the app
+ * stopping and restarting itself mid-paragraph.
+ *
+ * A session is stateless across run() calls, so one per voice is all that is
+ * ever needed. Loading it also dominates synthesis time, which is why this
+ * makes every sentence after the first several times faster. */
+let V = null, Q = null;
+async function G(e, m) {
+  // A load already running may be for a different voice, so wait it out and
+  // then re-check rather than handing back whatever it happens to produce.
+  while (Q) await Q.catch(() => { /* its own caller reports it */ });
+  if (V && V.voiceId === e) return V;
+  Q = (async () => {
+    if (V) {
+      try { await V.session.release(); } catch { /* already gone */ }
+      V = null;
+    }
+    const n = c[e];
+    const i = JSON.parse(await (await f(`${u}/${n}.json`)).text());
+    const k = await f(`${u}/${n}`, m);
+    const y = await _.InferenceSession.create(await k.arrayBuffer());
+    V = { voiceId: e, config: i, session: y };
+    return V;
+  })();
+  try { return await Q; } finally { Q = null; }
+}
 async function N(e, m) {
   h = h ?? await import("./piper-DeOu3H9E.js"), _ = _ ?? await import("../onnxruntime/ort.wasm.min.js");
-  const n = c[e.voiceId], o = JSON.stringify([{ text: e.text.trim() }]);
+  const o = JSON.stringify([{ text: e.text.trim() }]);
   _.env.allowLocalModels = !1, _.env.wasm.numThreads=1, _.env.wasm.wasmPaths = B;
-  const a = await f(`${u}/${n}.json`), i = JSON.parse(await a.text()), t = await new Promise(async (v) => {
+  const { config: i, session: y } = await G(e.voiceId, m), t = await new Promise(async (v) => {
     (await h.createPiperPhonemize({
       print: (l) => {
         v(JSON.parse(l).phoneme_ids);
@@ -197,7 +229,7 @@ async function N(e, m) {
       "--espeak_data",
       "/espeak-ng-data"
     ]);
-  }), r = 0, s = i.audio.sample_rate, d = i.inference.noise_scale, g = i.inference.length_scale, U = i.inference.noise_w, k = await f(`${u}/${n}`, m), y = await _.InferenceSession.create(await k.arrayBuffer()), w = {
+  }), r = 0, s = i.audio.sample_rate, d = i.inference.noise_scale, g = i.inference.length_scale, U = i.inference.noise_w, w = {
     input: new _.Tensor("int64", t, [1, t.length]),
     input_lengths: new _.Tensor("int64", [t.length]),
     scales: new _.Tensor("float32", [d, g, U])

@@ -19,6 +19,15 @@ const ABBREV = new Set([
   'pp', 'p', 'vol', 'ed', 'eds', 'chap', 'sect', 'sec', 'suppl', 'appx',
   'inc', 'ltd', 'co', 'corp', 'dept', 'univ', 'est', 'min', 'max',
   'i.e', 'e.g', 'et', 'mg', 'ml', 'kg', 'cm', 'mm',
+  // Months. A date is the commonest abbreviation in a paper after "et al.",
+  // and "On Jan. 5 the cohort was closed" split into three pieces without it.
+  'jan', 'feb', 'mar', 'apr', 'jun', 'jul', 'aug', 'sep', 'sept', 'oct',
+  'nov', 'dec',
+  // Titles and places, which turn up in affiliations and case reports.
+  'gen', 'col', 'lt', 'capt', 'sgt', 'gov', 'sen', 'messrs', 'mt', 'ave',
+  'blvd', 'rd', 'assn', 'natl',
+  // Units that end a clause often enough to matter.
+  'kb', 'mb', 'gb', 'hr', 'hrs', 'secs', 'wk', 'wks', 'yr', 'yrs',
 ]);
 
 const OPENERS = '"\'“‘([{';
@@ -68,6 +77,16 @@ function isBoundary(text, i) {
   // "U.S." / "e.g." — the dotted form arrives here as "s"/"g" after stripping.
   if (w.length === 1 && isAlpha(prev) && text[i - 2] === '.') return false;
 
+  // The *opening* dot of a dotted abbreviation: "Ph.D.", "U.S.A.", "Dr.rer.nat".
+  // Only the last dot of those is ever a full stop, and the tell is that the
+  // next token is one or two letters closed by another dot, with no space
+  // between. Without this, "a Ph.D. in 2010" is read as "a Ph." then
+  // "D. in 2010" — two fragments and a pause where no pause belongs.
+  if (isAlpha(prev) && next && !/\s/.test(next) &&
+      /^[A-Za-z]{1,2}\./.test(text.slice(i + 1))) {
+    return false;
+  }
+
   // A numbered list marker or section number: "3." or "2.1."
   if (isDigit(prev) && /^\s*$/.test(text.slice(0, i).split('\n').pop().replace(/[\d.]/g, ''))) {
     return false;
@@ -102,6 +121,25 @@ function startsSentence(text, j) {
   return true;
 }
 
+/* Where a forced break is least audible, best first.
+ *
+ * A sentence past the limit has to be broken somewhere, and the listener hears
+ * whichever place we pick: the voice drops its intonation and pauses there as
+ * if the sentence had ended. A dash, a semicolon or a colon is a place the
+ * author already meant as a pause, so a break there is nearly free. A comma
+ * that introduces a clause — "…, which", "…, but" — is the next best thing,
+ * because the second half still opens like a clause rather than starting in
+ * mid-thought. A bare comma is worse, and a plain word space is the last
+ * resort: it always lands mid-clause. */
+const BREAKS = [
+  /\s[—–-]\s(?=\S)/g,
+  /;\s(?=\S)/g,
+  /:\s(?=\S)/g,
+  /,\s(?=(?:and|but|or|nor|yet|so|which|while|whereas|although|though|because|since|before|after|unless|whether|if)\b)/gi,
+  /,\s(?=\S)/g,
+  /\s(?=\S)/g,
+];
+
 /** Break an over-long sentence at the most natural interior punctuation. */
 function softSplit(s, limit) {
   if (s.length <= limit) return [s];
@@ -113,7 +151,8 @@ function softSplit(s, limit) {
     const window = rest.slice(0, limit);
     let cut = -1;
 
-    for (const re of [/;\s(?=\S)/g, /:\s(?=\S)/g, /,\s(?=\S)/g, /\s(?=\S)/g]) {
+    for (const re of BREAKS) {
+      re.lastIndex = 0;
       let m, last = -1;
       // Prefer a break past the halfway mark so neither half is a fragment.
       while ((m = re.exec(window)) !== null) {
@@ -123,7 +162,13 @@ function softSplit(s, limit) {
       if (last > limit * 0.35) { cut = last; break; }
     }
 
-    if (cut <= 0) cut = limit;
+    // Nothing usable in the first half. Break at the last word boundary that
+    // fits rather than at the character count, which would cut a word in two
+    // and leave the voice sounding the halves as if they were words.
+    if (cut <= 0) {
+      const space = window.lastIndexOf(' ');
+      cut = space > 0 ? space + 1 : limit;
+    }
     out.push(rest.slice(0, cut).trim());
     rest = rest.slice(cut).trim();
   }

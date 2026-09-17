@@ -10,7 +10,7 @@
  * Bump VERSION whenever any precached file changes; the old cache is dropped
  * on activate.
  */
-const VERSION = 'v1.1.4';
+const VERSION = 'v1.1.5';
 const CORE  = `reader-core-${VERSION}`;
 const HEAVY = 'reader-heavy';        // deliberately unversioned: assets are
                                      // immutable, keyed by their own filename
@@ -80,6 +80,18 @@ self.addEventListener('activate', (e) => {
       keys.filter(k => k.startsWith('reader-core-') && k !== CORE)
           .map(k => caches.delete(k))
     );
+
+    // Vendored JavaScript used to land in the unversioned HEAVY cache, and
+    // caches.match() searches every cache, so those copies would go on being
+    // served whatever the version says. Evict them once; the binaries beside
+    // them, which are what HEAVY is actually for, are left alone.
+    try {
+      const heavy = await caches.open(HEAVY);
+      for (const req of await heavy.keys()) {
+        if (/\.m?js$/.test(new URL(req.url).pathname)) await heavy.delete(req);
+      }
+    } catch { /* nothing cached yet */ }
+
     await self.clients.claim();
   })());
 });
@@ -92,12 +104,21 @@ self.addEventListener('message', (e) => {
  * force on every install, so they are cached the first time they are actually
  * used: ~25 MB of OCR engine, and ~38 MB of Piper (the espeak pronunciation
  * data plus the ONNX WebAssembly builds). Voice models are not here — those
- * live in the Origin Private File System, managed by the Piper engine. */
+ * live in the Origin Private File System, managed by the Piper engine.
+ *
+ * Only the binaries, though. The HEAVY cache is deliberately never versioned,
+ * which is right for a .wasm or an 18 MB pronunciation dictionary that is the
+ * same bytes forever, and wrong for the JavaScript beside them: vendor.ps1
+ * patches those files in place and they keep their names, so a copy in an
+ * unversioned cache is served for good and a fix can never reach an installed
+ * app. They are small, so they ride in the versioned cache with our own code
+ * and are simply refetched after a version bump. */
 const isHeavy = (url) =>
-  url.pathname.includes('/vendor/tesseract/') ||
-  url.pathname.includes('/vendor/piper/') ||
-  url.pathname.includes('/vendor/onnxruntime/') ||
-  url.pathname.includes('/vendor/pdfjs/standard_fonts/');
+  !/\.m?js$/.test(url.pathname) && (
+    url.pathname.includes('/vendor/tesseract/') ||
+    url.pathname.includes('/vendor/piper/') ||
+    url.pathname.includes('/vendor/onnxruntime/') ||
+    url.pathname.includes('/vendor/pdfjs/standard_fonts/'));
 
 /* On localhost the cache-first strategy below would serve yesterday's code
  * every time you edit a file, which turns every change into a debugging

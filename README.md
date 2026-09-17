@@ -272,7 +272,7 @@ deleted before deploying.
 ### Running the tests
 
 ```bash
-node --test test/
+node --test
 ```
 
 Node is not a runtime dependency — the app itself still needs no toolchain —
@@ -380,8 +380,10 @@ but it works. Settings › Show diagnostics reports which path was taken.
 ## Notes on the Piper integration
 
 `@diffusionstudio/vits-web` is published expecting a bundler, so
-`tools/vendor.ps1` applies five rewrites to it after download. Re-running the
-script reapplies them; the patches are idempotent.
+`tools/vendor.ps1` applies six rewrites to it after download. Re-running the
+script reapplies them; the patches are idempotent, and the script says loudly
+if rewrite 5 no longer matches, because that one is a correctness fix rather
+than a packaging one.
 
 1. **`import("onnxruntime-web")`** — a bare specifier. Nothing resolves that in
    a browser without an import map or a bundler, so it is pointed at the
@@ -401,6 +403,15 @@ script reapplies them; the patches are idempotent.
    flight and the next read got a truncated model — surfacing as
    `No graph was found in the protobuf`. Upstream bug; `predict()`'s
    on-demand path awaits correctly and is unaffected.
+5. **`predict()` built a new `InferenceSession` for every sentence** — reading
+   the whole 60 MB model back out of OPFS to do it — and never released any of
+   them. onnxruntime's WebAssembly heap is a process-wide singleton that only
+   ever grows, so half a minute of listening left the tab holding several
+   hundred megabytes, and the browser killed it; on a phone that looked like
+   the app stopping and restarting itself mid-paragraph, with the play button
+   reset. A session is stateless across `run()` calls, so one is now loaded per
+   voice and kept. Loading it was also most of what made synthesis slow, so
+   every sentence after the first is markedly faster.
 
 Inference is also moved into `js/tts/piper-worker.js`. The package runs it
 inline despite a docstring claiming otherwise — there is no `Worker` anywhere

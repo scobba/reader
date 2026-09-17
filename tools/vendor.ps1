@@ -246,6 +246,75 @@ function Patch-Vits {
         $src = $src -replace $pat, '$1await p(a, await S('
         $hits++
     }
+
+    # 5. Upstream builds a brand new onnxruntime InferenceSession - and
+    #    re-reads the 63 MB model out of OPFS to do it - for every single
+    #    sentence, and never releases any of them. onnxruntime's WASM heap is
+    #    a process-wide singleton that only ever grows, so half a minute of
+    #    listening leaves the tab holding several hundred megabytes and the
+    #    browser kills it; on a phone that reads as the app stopping and
+    #    restarting itself mid-paragraph. A session is stateless across run()
+    #    calls, so one per voice is loaded and kept. It is also what dominates
+    #    synthesis time, so every sentence after the first gets much faster.
+    #    Plain string replacement, not regex: the text is full of $ and ` .
+    $oldHead = @'
+let h, _;
+async function N(e, m) {
+  h = h ?? await import("./piper-DeOu3H9E.js"), _ = _ ?? await import("../onnxruntime/ort.wasm.min.js");
+  const n = c[e.voiceId], o = JSON.stringify([{ text: e.text.trim() }]);
+  _.env.allowLocalModels = !1, _.env.wasm.numThreads=1, _.env.wasm.wasmPaths = B;
+  const a = await f(`${u}/${n}.json`), i = JSON.parse(await a.text()), t = await new Promise(async (v) => {
+'@
+    $newHead = @'
+let h, _;
+/* mr-patch: keep the loaded voice between sentences.
+ *
+ * Upstream re-reads the 63 MB .onnx out of OPFS and builds a brand new
+ * InferenceSession on every predict() call, and never releases it. The
+ * onnxruntime WASM heap is a process-wide singleton that only grows, so a few
+ * sentences in - about half a minute of listening - the tab is holding several
+ * hundred megabytes and the browser kills it. On a phone that reads as the app
+ * stopping and restarting itself mid-paragraph.
+ *
+ * A session is stateless across run() calls, so one per voice is all that is
+ * ever needed. Loading it also dominates synthesis time, which is why this
+ * makes every sentence after the first several times faster. */
+let V = null, Q = null;
+async function G(e, m) {
+  // A load already running may be for a different voice, so wait it out and
+  // then re-check rather than handing back whatever it happens to produce.
+  while (Q) await Q.catch(() => { /* its own caller reports it */ });
+  if (V && V.voiceId === e) return V;
+  Q = (async () => {
+    if (V) {
+      try { await V.session.release(); } catch { /* already gone */ }
+      V = null;
+    }
+    const n = c[e];
+    const i = JSON.parse(await (await f(`${u}/${n}.json`)).text());
+    const k = await f(`${u}/${n}`, m);
+    const y = await _.InferenceSession.create(await k.arrayBuffer());
+    V = { voiceId: e, config: i, session: y };
+    return V;
+  })();
+  try { return await Q; } finally { Q = null; }
+}
+async function N(e, m) {
+  h = h ?? await import("./piper-DeOu3H9E.js"), _ = _ ?? await import("../onnxruntime/ort.wasm.min.js");
+  const o = JSON.stringify([{ text: e.text.trim() }]);
+  _.env.allowLocalModels = !1, _.env.wasm.numThreads=1, _.env.wasm.wasmPaths = B;
+  const { config: i, session: y } = await G(e.voiceId, m), t = await new Promise(async (v) => {
+'@
+    $oldTail = '  }), r = 0, s = i.audio.sample_rate, d = i.inference.noise_scale, g = i.inference.length_scale, U = i.inference.noise_w, k = await f(`${u}/${n}`, m), y = await _.InferenceSession.create(await k.arrayBuffer()), w = {'
+    $newTail = '  }), r = 0, s = i.audio.sample_rate, d = i.inference.noise_scale, g = i.inference.length_scale, U = i.inference.noise_w, w = {'
+
+    if ($src.Contains($oldHead) -and $src.Contains($oldTail)) {
+        $src = $src.Replace($oldHead, $newHead).Replace($oldTail, $newTail)
+        $hits += 2
+    } elseif (-not $src.Contains('mr-patch: keep the loaded voice')) {
+        Write-Host "  WARN  vits-web predict() no longer matches - the session cache was NOT applied." -ForegroundColor Red
+        Write-Host "        Playback will leak ~100 MB per sentence until this is reapplied." -ForegroundColor Red
+    }
     [IO.File]::WriteAllText($full, $src, (New-Object Text.UTF8Encoding($false)))
     Write-Host ("  patch piper/vits-web.js  ({0} rewrites)" -f $hits) -ForegroundColor Green
 }

@@ -263,11 +263,20 @@ export class Player {
     return -1;
   }
 
+  /* The current sentence leads the list, not just the ones after it.
+   *
+   * A neural engine renders in the order it is asked, and this runs just
+   * before the sentence is spoken. Asking only for what comes next would put
+   * three sentences of synthesis in front of the one the listener is waiting
+   * on, which is a long silence every time playback starts or jumps. Naming it
+   * first means the engine is already making it when speak() asks, and speak()
+   * joins that render rather than starting a second one. */
   #primeAhead() {
     if (!this.#engine?.prime) return;
     const ahead = [];
-    let i = this.#index + 1;
-    while (ahead.length < LOOKAHEAD_SENTENCES && i < this.#sentences.length) {
+    let i = this.#index;
+    const want = LOOKAHEAD_SENTENCES + 1;   // the current sentence, then the lookahead
+    while (ahead.length < want && i < this.#sentences.length) {
       const s = this.#sentences[i++];
       if (!s.skip) ahead.push(s.speak);
     }

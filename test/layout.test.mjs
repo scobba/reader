@@ -1,6 +1,6 @@
 /* Layout regression tests.
  *
- *   node --test test/
+ *   node --test
  *
  * Node is not a runtime dependency of this app — nothing here is served — but
  * layout.js is pure geometry with no DOM in it, which makes it cheap to test
