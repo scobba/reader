@@ -81,14 +81,15 @@ self.addEventListener('activate', (e) => {
           .map(k => caches.delete(k))
     );
 
-    // Vendored JavaScript used to land in the unversioned HEAVY cache, and
+    // The patched Piper files used to land in the unversioned HEAVY cache, and
     // caches.match() searches every cache, so those copies would go on being
-    // served whatever the version says. Evict them once; the binaries beside
-    // them, which are what HEAVY is actually for, are left alone.
+    // served whatever the version says. Evict them once. Everything else in
+    // HEAVY — the OCR engine, the pronunciation data, the wasm — is what the
+    // cache is for and is left alone.
     try {
       const heavy = await caches.open(HEAVY);
       for (const req of await heavy.keys()) {
-        if (/\.m?js$/.test(new URL(req.url).pathname)) await heavy.delete(req);
+        if (isPatchedVendorCode(new URL(req.url).pathname)) await heavy.delete(req);
       }
     } catch { /* nothing cached yet */ }
 
@@ -106,15 +107,24 @@ self.addEventListener('message', (e) => {
  * data plus the ONNX WebAssembly builds). Voice models are not here — those
  * live in the Origin Private File System, managed by the Piper engine.
  *
- * Only the binaries, though. The HEAVY cache is deliberately never versioned,
- * which is right for a .wasm or an 18 MB pronunciation dictionary that is the
- * same bytes forever, and wrong for the JavaScript beside them: vendor.ps1
- * patches those files in place and they keep their names, so a copy in an
- * unversioned cache is served for good and a fix can never reach an installed
- * app. They are small, so they ride in the versioned cache with our own code
- * and are simply refetched after a version bump. */
+ * With one exception. The HEAVY cache is deliberately never versioned, which is
+ * right for bytes that are the same forever, and wrong for the handful of files
+ * vendor.ps1 patches in place: those keep their names, so a copy in a cache
+ * nothing ever evicts is served for good and a fix can never reach an installed
+ * app. Those four — the Piper and onnxruntime JavaScript, about 400 KB — ride
+ * in the versioned cache with our own code instead, and are refetched after a
+ * version bump.
+ *
+ * Only those four. Tesseract's core is shipped as Emscripten glue named
+ * `.wasm.js`, and the six variants are 4 MB apiece: matching on the extension
+ * would throw 25 MB of OCR engine away on every version bump. Nothing patches
+ * them, so they stay where they belong. */
+const isPatchedVendorCode = (p) =>
+  /\.m?js$/.test(p) &&
+  (p.includes('/vendor/piper/') || p.includes('/vendor/onnxruntime/'));
+
 const isHeavy = (url) =>
-  !/\.m?js$/.test(url.pathname) && (
+  !isPatchedVendorCode(url.pathname) && (
     url.pathname.includes('/vendor/tesseract/') ||
     url.pathname.includes('/vendor/piper/') ||
     url.pathname.includes('/vendor/onnxruntime/') ||
