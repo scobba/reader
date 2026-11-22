@@ -69,6 +69,10 @@ const FURNITURE_MEASURE_DEV = 0.15;
 const FIGURE_MIN_REGIONS = 3;
 // Header/footer band, as a fraction of page height.
 const MARGIN_BAND = 0.075;
+// How much of a document's text has to be accounted for before the sizes seen
+// so far are taken to include the body. Everything rarer than this is display
+// type: headings, the masthead, a title.
+const BODY_SIZE_COVERAGE = 0.6;
 
 /* ═══════════════════════════════════════════════════════════ helpers ══ */
 
@@ -741,17 +745,57 @@ function classifyRegions(lines, bodySize) {
  * @returns {Array<{type:'heading'|'para'|'caption', text:string, page:number,
  *                  size:number, level?:number, furniture?:'table'|'figure'}>}
  */
-export function linesToBlocks(lines) {
-  if (!lines.length) return [];
-
-  // Body size = the size most of the document's characters are set in.
+/* The size the document's prose is set in.
+ *
+ * The obvious estimator — the size most of the document's characters are set in
+ * — is wrong for exactly the documents that need it most. A 120-page guideline
+ * carries more characters in its 7pt reference list, footnotes and
+ * recommendation tables than in its 10pt prose, because small dense type fits
+ * far more characters on a page. Taking 7pt as the body then makes every
+ * ordinary line of prose "big", and isHeading files the whole body of the
+ * document as one-line headings: each one ends the paragraph it was in the
+ * middle of, is announced with a pause, and is read out as a fragment. That is
+ * a document read aloud as a list of half-sentences.
+ *
+ * What the body size is actually asked, over and over, is "is this line bigger
+ * than the running text" — and the thing that makes a heading a heading is that
+ * there is hardly any of it. So size up the document by how much text each size
+ * carries, take the heaviest sizes until they account for most of it, and call
+ * the largest of those the body. A reference list that outweighs the prose is
+ * still in that set, and so is the prose; display type never is, because there
+ * is never much of it. The body size falls out as the larger of the two, which
+ * is what every ratio downstream wants.
+ *
+ * Deliberately not line counts: lines are a proxy for columns and page size,
+ * and 40 reference lines and 40 prose lines are not 40 of the same thing.
+ */
+function bodyTextSize(lines) {
   const weight = new Map();
+  let total = 0;
   for (const l of lines) {
     const k = Math.round(l.size * 2) / 2;
     weight.set(k, (weight.get(k) || 0) + l.text.length);
+    total += l.text.length;
   }
-  let bodySize = 10, bestW = -1;
-  for (const [k, w] of weight) if (w > bestW) { bestW = w; bodySize = k; }
+  if (!total) return 10;
+
+  // Heaviest first, so the set only ever grows towards sizes there is a lot of.
+  const bySubstance = [...weight.entries()].sort((a, b) => b[1] - a[1]);
+
+  let seen = 0;
+  let body = bySubstance[0][0];
+  for (const [size, chars] of bySubstance) {
+    body = Math.max(body, size);
+    seen += chars;
+    if (seen >= total * BODY_SIZE_COVERAGE) break;
+  }
+  return body || 10;
+}
+
+export function linesToBlocks(lines) {
+  if (!lines.length) return [];
+
+  const bodySize = bodyTextSize(lines);
 
   const regionKind = classifyRegions(lines, bodySize);
 
@@ -760,14 +804,26 @@ export function linesToBlocks(lines) {
   // paragraph test independent of how the source reports glyph size — pdf.js
   // gives a tight font size, OCR gives ascender-to-descender word boxes, and
   // a gap threshold in font sizes only works for one of them.
-  const steps = [];
-  for (let i = 1; i < lines.length; i++) {
-    const a = lines[i - 1], b = lines[i];
-    if (a.page !== b.page || Math.abs(a.col.left - b.col.left) >= 2) continue;
-    const d = b.base - a.base;
-    if (d > 0 && d < bodySize * 4) steps.push(d);
-  }
-  const pitch = median(steps);
+  //
+  // Measured over the body text only, for the same reason the body size is: a
+  // reference list is set tighter than the prose and there can be more of it,
+  // and a pitch taken from the whole document then reads every ordinary line
+  // as sitting too far below the one above — breaking the paragraph at every
+  // single line. Falls back to measuring everything, for a document that has
+  // no body text to measure.
+  const stepsAt = (atBody) => {
+    const steps = [];
+    for (let i = 1; i < lines.length; i++) {
+      const a = lines[i - 1], b = lines[i];
+      if (a.page !== b.page || Math.abs(a.col.left - b.col.left) >= 2) continue;
+      if (atBody && (Math.abs(a.size - bodySize) > 0.6 ||
+                     Math.abs(b.size - bodySize) > 0.6)) continue;
+      const d = b.base - a.base;
+      if (d > 0 && d < bodySize * 4) steps.push(d);
+    }
+    return steps;
+  };
+  const pitch = median(stepsAt(true)) || median(stepsAt(false));
 
   const isHeading = (l, prevGap) => {
     const t = l.text.trim();
@@ -801,7 +857,20 @@ export function linesToBlocks(lines) {
                     Math.abs(prev.col.left - l.col.left) < 2;
     const gap = sameCol ? l.top - prev.bot : Infinity;
 
-    if (isHeading(l, sameCol ? gap : l.size)) {
+    // A line that neither closes a sentence nor is followed by a capital is
+    // mid-sentence, whatever the geometry suggests. Without this veto,
+    // ragged-right text breaks at every short line, and each fragment then
+    // gets spoken as if it were its own sentence — full stop and all.
+    const continues = prev && !/[.!?:;]["'’”)\]]?$/.test(prev.text) &&
+                      /^[\p{Ll}]/u.test(l.text);
+
+    // Which also settles it for headings: prose carrying on from the line
+    // above is prose, whatever its size says. The body size is an estimate, and
+    // in a document whose reference list and tables outweigh its prose it can
+    // land low enough to make ordinary lines look big. Getting that wrong must
+    // not cost the body of the document — a heading read as prose loses a pause
+    // and an outline entry, while prose read as headings is unlistenable.
+    if (!continues && isHeading(l, sameCol ? gap : l.size)) {
       flush();
       blocks.push({
         type: 'heading',
@@ -813,13 +882,6 @@ export function linesToBlocks(lines) {
       prev = l;
       continue;
     }
-
-    // A line that neither closes a sentence nor is followed by a capital is
-    // mid-sentence, whatever the geometry suggests. Without this veto,
-    // ragged-right text breaks at every short line, and each fragment then
-    // gets spoken as if it were its own sentence — full stop and all.
-    const continues = prev && !/[.!?:;]["'’”)\]]?$/.test(prev.text) &&
-                      /^[\p{Ll}]/u.test(l.text);
 
     let breakHere = !cur;
     if (!breakHere) {
@@ -834,8 +896,28 @@ export function linesToBlocks(lines) {
         // lowercase start is stitched back together.
         breakHere = !(continues && cur.type === 'para' && !isCaption(l.text));
       }
-      else if (pitch > 0 ? step > pitch * 1.32 : gap > l.size * 0.78) breakHere = true;
-      else if (l.x0 > prev.x0 + l.size * 1.1) breakHere = true;
+      // Leading, the strongest signal there is for a paragraph break — and it
+      // too defers to the sentence. A new paragraph starts a new sentence, so
+      // a line carrying the previous one on is not one, however much air sits
+      // above it. This is what keeps a sentence whole across a figure, a
+      // column break or a page turn, and what saves the prose in a document
+      // whose body size could not be worked out.
+      else if (!continues &&
+               (pitch > 0 ? step > pitch * 1.32 : gap > l.size * 0.78)) breakHere = true;
+      // A first-line indent starts a new paragraph — but only when the line
+      // above actually ended one. A hanging indent is the same geometry in
+      // reverse: a numbered item sets its number out to the left and aligns
+      // every continuation line under the text, so each continuation looks
+      // indented relative to the line before it. Guidelines are full of them,
+      // and read as a new paragraph each one ends the sentence it is in the
+      // middle of — mid-word, where the line broke a hyphenated word.
+      //
+      // Two things tell a hanging indent from a real one. The sentence runs
+      // on, which is the same veto the rule below uses; or the line above ran
+      // the full width of its column, because a paragraph's last line is
+      // short and a full-measure line is mid-paragraph by definition.
+      else if (l.x0 > prev.x0 + l.size * 1.1 && !continues &&
+               prev.x1 < prev.col.right - l.size) breakHere = true;
       else if (prev.x1 < prev.col.right - l.size * 2.2 && !continues) breakHere = true;
       else if (LIST_MARKER.test(l.text)) breakHere = true;
       else if (isCaption(l.text)) breakHere = true;

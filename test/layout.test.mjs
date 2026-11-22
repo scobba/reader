@@ -473,3 +473,133 @@ test('stitches a paragraph running from one column into the next', () => {
     /across the United Kingdom\. The protocol has been published\./,
   );
 });
+
+/* ── body size, and what it drags with it ─────────────────────────────── */
+
+/** A page of dense small type: a reference list or a recommendation table.
+ *  Deliberately more characters than the prose pages it is weighed against,
+ *  which is the whole point — small type fits far more on a page. */
+function densePage(pageNum, size = 7) {
+  const rows = [];
+  for (let i = 0; i < 40; i++) {
+    rows.push(atom(
+      `${i + 1}. Author AB, Other CD, Third EF, et al. A title that runs the ` +
+      `full measure of the column. Journal. 2019;${100 + i}:${i}-${i + 9}.`,
+      62, 60 + i * 9, size, 198));
+  }
+  return pageLines(rows, PAGE, pageNum);
+}
+
+/** Pages of ordinary 10pt prose, two columns, as BODY is. */
+function prosePages(from, to) {
+  const out = [];
+  for (let p = from; p <= to; p++) out.push(...pageLines(BODY, PAGE, p));
+  return out;
+}
+
+test('dense back matter does not get to redefine the body text size', () => {
+  // A long guideline carries more characters in its 7pt reference list and
+  // tables than in its 10pt prose. Choosing the body size by character count
+  // picks the 7pt, every ordinary prose line then counts as "big", and
+  // isHeading files the entire body of the document as one-line headings —
+  // each one announced with a pause and read out as a fragment. The
+  // proportions here are the ones measured off a real 123-page guideline:
+  // about 1.35 characters of small dense type for every one of prose.
+  const prose = prosePages(1, 40);
+  const dense = [];
+  for (let p = 41; p <= 48; p++) dense.push(...densePage(p));
+
+  const chars = (ls) => ls.reduce((n, l) => n + l.text.length, 0);
+  assert.ok(chars(dense) > chars(prose),
+    'the dense pages must out-weigh the prose in characters for this to test anything');
+
+  const blocks = linesToBlocks([...prose, ...dense]);
+  const body = blocks.filter(b => b.page <= 40);
+  const headings = body.filter(b => b.type === 'heading');
+
+  assert.equal(headings.length, 0,
+    `prose was filed as headings: ${JSON.stringify(headings.slice(0, 3).map(b => b.text))}`);
+  // And gathered into paragraphs rather than one block per line: 40 pages of
+  // two columns is 80 paragraphs at most, against 640 lines.
+  assert.ok(body.length <= 80, `expected paragraphs, got ${body.length} blocks`);
+});
+
+test('prose survives even when the body size estimate is beaten', () => {
+  // Push it past what any estimator can see: a document that really is 93%
+  // small dense type, where 7pt is the honest answer for "the size most of
+  // this document is set in". The prose must still be gathered into
+  // paragraphs, because a line carrying on the sentence above it is prose
+  // whatever its size suggests. Only the opening line of each column can be
+  // mistaken, having nothing before it to carry on from.
+  const prose = prosePages(1, 6);
+  const dense = [];
+  for (let p = 7; p <= 18; p++) dense.push(...densePage(p));
+
+  const blocks = linesToBlocks([...prose, ...dense]);
+  const body = blocks.filter(b => b.page <= 6);
+  const headings = body.filter(b => b.type === 'heading');
+
+  assert.ok(headings.length <= 2 * 6,
+    `expected at most one stray heading per column, got ${headings.length}`);
+  assert.ok(body.length <= 4 * 6,
+    `prose was shredded into ${body.length} blocks over 6 pages`);
+});
+
+test('display type never counts as body text, however short the document', () => {
+  // There is hardly any of a heading, so it is never in the set of sizes that
+  // carry the document, and it stays bigger than the body it sits above.
+  const atoms = [atom('Methods', 62, 63, 13), ...column(62, 87, LEFT)];
+  const blocks = linesToBlocks(pageLines(atoms, PAGE, 1));
+  assert.equal(blocks[0].type, 'heading');
+  assert.equal(blocks[0].text, 'Methods');
+});
+
+/* ── indents ──────────────────────────────────────────────────────────── */
+
+test('a hanging indent does not start a new paragraph on every line', () => {
+  // A numbered recommendation sets its number out to the left and aligns the
+  // continuation lines under the text, so each continuation looks indented
+  // against the line above it. Read as a new paragraph, every one of them
+  // ends the sentence it is in the middle of — and because the line broke a
+  // hyphenated word, it ends mid-word.
+  const lines = pageLines([
+    atom('4. LDL-C and non-high-density lipoprotein choles-', 58, 63, 10, 225),
+    atom('terol (HDL-C) treatment goals are back to guide', 73, 75, 10, 210),
+    atom('LLT. Percentage reduction in LDL-C remains a', 73, 87, 10, 210),
+    atom('priority for all individuals as well.', 73, 99, 10, 120),
+  ], PAGE, 1);
+
+  const blocks = linesToBlocks(lines);
+  assert.equal(blocks.length, 1, `split into ${blocks.length} blocks: ${JSON.stringify(blocks.map(b => b.text))}`);
+  assert.match(blocks[0].text, /lipoprotein cholesterol \(HDL-C\)/,
+    'the word broken across the line boundary should be rejoined');
+});
+
+test('a hanging indent is stitched even when the next line starts capitalised', () => {
+  // The lowercase-start veto cannot help here: "Association" is a proper noun
+  // in the middle of the sentence. The full-measure line above it is the tell.
+  const lines = pageLines([
+    atom('2. Use the more contemporary American Heart', 58, 63, 10, 225),
+    atom('Association risk equations instead of the older', 73, 75, 10, 210),
+    atom('equations for primary prevention in adults.', 73, 87, 10, 110),
+  ], PAGE, 1);
+
+  const blocks = linesToBlocks(lines);
+  assert.equal(blocks.length, 1, `split into ${blocks.length} blocks: ${JSON.stringify(blocks.map(b => b.text))}`);
+  assert.match(blocks[0].text, /American Heart Association risk equations/);
+});
+
+test('a real first-line indent still starts a new paragraph', () => {
+  // The guard must not cost us the case the rule is for: an indented first
+  // line after a paragraph that genuinely ended, i.e. whose last line is short.
+  const lines = pageLines([
+    atom('events related to a trial intervention occurred in', 62, 63, 10, 198),
+    atom('either group over the whole period.', 62, 75, 10, 120),
+    atom('Adherence to the assigned regimen was high in all', 73, 87, 10, 198),
+    atom('four groups, and no participant withdrew consent.', 73, 99, 10, 198),
+  ], PAGE, 1);
+
+  const blocks = linesToBlocks(lines);
+  assert.equal(blocks.length, 2, `expected two paragraphs, got ${blocks.length}`);
+  assert.match(blocks[1].text, /^Adherence to the assigned regimen/);
+});
