@@ -15,9 +15,11 @@
  */
 
 import * as vits from '../../vendor/piper/vits-web.js';
+import { isModelUnreadable } from './model-errors.js';
 
-const reply = (id, ok, payload) =>
-  self.postMessage(ok ? { id, ok: true, result: payload } : { id, ok: false, error: payload });
+const reply = (id, ok, payload, code) =>
+  self.postMessage(ok ? { id, ok: true, result: payload } : { id, ok: false, error: payload, code });
+
 
 self.onmessage = async (e) => {
   const { id, op, args = {} } = e.data || {};
@@ -51,10 +53,20 @@ self.onmessage = async (e) => {
         break;
 
       case 'predict': {
-        const blob = await vits.predict(
-          { text: args.text, voiceId: args.voiceId },
-          (p) => self.postMessage({ id, progress: { loaded: p.loaded, total: p.total, url: p.url } }),
-        );
+        let blob;
+        try {
+          blob = await vits.predict(
+            { text: args.text, voiceId: args.voiceId },
+            (p) => self.postMessage({ id, progress: { loaded: p.loaded, total: p.total, url: p.url } }),
+          );
+        } catch (err) {
+          if (!isModelUnreadable(err)) throw err;
+          // Throw the unusable file away, so the voice stops claiming to be
+          // ready and the engine can tell the listener what to do about it.
+          await vits.remove(args.voiceId).catch(() => { /* already gone */ });
+          reply(id, false, 'The voice model could not be read', 'VOICE_MODEL_UNREADABLE');
+          break;
+        }
         // Hand back an ArrayBuffer so it can be transferred rather than
         // structured-cloned; a sentence of audio is a few hundred kilobytes.
         const buf = await blob.arrayBuffer();
@@ -66,7 +78,7 @@ self.onmessage = async (e) => {
         reply(id, false, `Unknown op: ${op}`);
     }
   } catch (err) {
-    reply(id, false, (err && (err.message || String(err))) || 'Piper worker failed');
+    reply(id, false, (err && (err.message || String(err))) || 'Piper worker failed', err?.code);
   }
 };
 

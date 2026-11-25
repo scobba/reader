@@ -315,6 +315,165 @@ async function N(e, m) {
         Write-Host "  WARN  vits-web predict() no longer matches - the session cache was NOT applied." -ForegroundColor Red
         Write-Host "        Playback will leak ~100 MB per sentence until this is reapplied." -ForegroundColor Red
     }
+
+    # 6. A download that fails part way is stored and reported as a working
+    #    voice. Upstream reads the response body whatever the HTTP status, so
+    #    an error page is written as <voice>.onnx; it ignores Content-Length,
+    #    so a dropped connection stores half a model; the OPFS write logs its
+    #    own failures to the console and returns as if they had worked; and
+    #    stored() reports a voice as downloaded on the strength of the filename
+    #    alone. The result is a voice that says "On this device - works
+    #    offline" and fails every synthesis with onnxruntime's "No graph was
+    #    found in the protobuf", for good, since nothing ever removes the file.
+    #    Four replacements, again plain string ones - the text is full of $.
+    $old1 = @'
+async function p(e, m) {
+  if (e.match("https://huggingface.co"))
+    try {
+      const o = await (await navigator.storage.getDirectory()).getDirectoryHandle("piper", {
+        create: !0
+      }), a = e.split("/").at(-1), t = await (await o.getFileHandle(a, { create: !0 })).createWritable();
+      await t.write(m), await t.close();
+    } catch (n) {
+      console.error(n);
+    }
+}
+'@
+    $new1 = @'
+/* mr-patch: report a failed write instead of hiding it.
+ *
+ * Upstream logs the error to the console and returns as if it had worked, so a
+ * write that ran out of quota or was cut off leaves a partial file behind and
+ * download() resolves successfully. The voice then reports itself ready for
+ * good, and every synthesis fails in the ONNX parser.
+ *
+ * The partial file goes too: whatever is on disk after a failed write is not a
+ * model, and leaving it there is what makes the state stick. Callers decide
+ * what a failure means - download() surfaces it, predict()'s opportunistic
+ * cache write in f() stays best-effort. */
+async function p(e, m) {
+  if (!e.match("https://huggingface.co")) return;
+  const o = await (await navigator.storage.getDirectory()).getDirectoryHandle("piper", {
+    create: !0
+  }), a = e.split("/").at(-1), t = await (await o.getFileHandle(a, { create: !0 })).createWritable();
+  try {
+    await t.write(m), await t.close();
+  } catch (n) {
+    try { await t.abort(); } catch { /* already closed by the failure */ }
+    try { await o.removeEntry(a); } catch { /* nothing left to remove */ }
+    throw n;
+  }
+}
+'@
+    $old2 = @'
+async function S(e, m) {
+  var r;
+  const n = await fetch(e), o = (r = n.body) == null ? void 0 : r.getReader(), a = +(n.headers.get("Content-Length") ?? 0);
+  let i = 0, t = [];
+  for (; o; ) {
+    const { done: s, value: d } = await o.read();
+    if (s)
+      break;
+    t.push(d), i += d.length, m == null || m({
+      url: e,
+      total: a,
+      loaded: i
+    });
+  }
+  return new Blob(t, { type: n.headers.get("Content-Type") ?? void 0 });
+}
+'@
+    $new2 = @'
+async function S(e, m) {
+  var r;
+  const n = await fetch(e);
+  /* mr-patch: a failed request is not a model.
+   *
+   * Upstream reads the body whatever the status, so a 404 or a 502 from the
+   * host is stored as <voice>.onnx and the HTML of an error page goes to the
+   * ONNX parser a hundred megabytes later, as "No graph was found in the
+   * protobuf" - an error about the wrong thing, at the wrong time, with no
+   * mention of the download that actually failed. */
+  if (!n.ok) throw new Error(`Download failed for ${e}: HTTP ${n.status} ${n.statusText || ""}`.trim());
+  const o = (r = n.body) == null ? void 0 : r.getReader(), a = +(n.headers.get("Content-Length") ?? 0);
+  let i = 0, t = [];
+  for (; o; ) {
+    const { done: s, value: d } = await o.read();
+    if (s)
+      break;
+    t.push(d), i += d.length, m == null || m({
+      url: e,
+      total: a,
+      loaded: i
+    });
+  }
+  /* mr-patch: nor is half a model. A connection dropped part way through 63 MB
+   * ends the stream cleanly, so the read loop finishes and the short blob is
+   * written out as though it were complete. */
+  if (a && i !== a) throw new Error(`Download of ${e} stopped at ${i} of ${a} bytes`);
+  return new Blob(t, { type: n.headers.get("Content-Type") ?? void 0 });
+}
+'@
+    $old3 = @'
+async function f(e, m) {
+  let n = await D(e);
+  return n || (n = await S(e, m), await p(e, n)), n;
+}
+'@
+    $new3 = @'
+async function f(e, m) {
+  let n = await D(e);
+  if (n) return n;
+  n = await S(e, m);
+  // Keeping the bytes is a convenience; the caller already has them. Only the
+  // explicit download() API treats a failed write as a failed download.
+  try { await p(e, n); } catch (o) { console.error(o); }
+  return n;
+}
+'@
+    $old4 = @'
+async function L() {
+  const m = await (await navigator.storage.getDirectory()).getDirectoryHandle("piper", {
+    create: !0
+  }), n = [];
+  for await (const o of m.keys()) {
+    const a = o.split(".")[0];
+    o.endsWith(".onnx") && a in c && n.push(a);
+  }
+  return n;
+}
+'@
+    $new4 = @'
+async function L() {
+  const m = await (await navigator.storage.getDirectory()).getDirectoryHandle("piper", {
+    create: !0
+  }), n = [];
+  for await (const o of m.keys()) {
+    const a = o.split(".")[0];
+    if (!o.endsWith(".onnx") || !(a in c)) continue;
+    /* mr-patch: upstream reports a voice as downloaded on the strength of the
+     * filename alone. A stub left by a download that failed early is still
+     * called <voice>.onnx, so the interface says "On this device - works
+     * offline" and offers to play a voice that cannot load. Every real voice
+     * is tens of megabytes. */
+    try {
+      if ((await (await m.getFileHandle(o)).getFile()).size < 1048576) continue;
+    } catch {
+      continue;
+    }
+    n.push(a);
+  }
+  return n;
+}
+'@
+    if ($src.Contains($old1) -and $src.Contains($old2) -and $src.Contains($old3) -and $src.Contains($old4)) {
+        $src = $src.Replace($old1, $new1).Replace($old2, $new2).Replace($old3, $new3).Replace($old4, $new4)
+        $hits += 4
+    } elseif (-not $src.Contains('mr-patch: report a failed write')) {
+        Write-Host "  WARN  vits-web's download path no longer matches - the integrity" -ForegroundColor Red
+        Write-Host "        checks were NOT applied. A part-downloaded voice will be stored" -ForegroundColor Red
+        Write-Host "        and reported as ready, and every synthesis will fail." -ForegroundColor Red
+    }
     [IO.File]::WriteAllText($full, $src, (New-Object Text.UTF8Encoding($false)))
     Write-Host ("  patch piper/vits-web.js  ({0} rewrites)" -f $hits) -ForegroundColor Green
 }

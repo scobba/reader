@@ -92,7 +92,7 @@ export class PiperEngine extends Engine {
         20000);
 
       worker.onmessage = (e) => {
-        const { id, ok, result, error, progress } = e.data || {};
+        const { id, ok, result, error, progress, code } = e.data || {};
 
         if (id === '__ready') {
           clearTimeout(boot);
@@ -107,8 +107,10 @@ export class PiperEngine extends Engine {
         if (progress) { entry.onProgress?.(progress); return; }
 
         this.#pending.delete(id);
-        if (ok) entry.resolve(result);
-        else entry.reject(new Error(error));
+        if (ok) { entry.resolve(result); return; }
+        const err = new Error(error);
+        if (code) err.code = code;
+        entry.reject(err);
       };
 
       worker.onerror = (e) => {
@@ -214,8 +216,22 @@ export class PiperEngine extends Engine {
     // One model, one session: serialise so lookahead rendering and the
     // sentence being played do not interleave and thrash the runtime.
     const run = this.#queue.then(async () => {
-      const { buf, type } = await this.#call('predict', { text, voiceId });
-      return new Blob([buf], { type: type || 'audio/wav' });
+      try {
+        const { buf, type } = await this.#call('predict', { text, voiceId });
+        return new Blob([buf], { type: type || 'audio/wav' });
+      } catch (err) {
+        if (err?.code !== 'VOICE_MODEL_UNREADABLE') throw err;
+        // The worker has already deleted it. Re-read what is actually on the
+        // device so the interface stops offering a voice that cannot load,
+        // and say the one thing that fixes it — the raw parser error named
+        // neither the voice nor the download.
+        this.#storedVoices = null;
+        this.storedVoices({ refresh: true }).catch(() => {});
+        const label = this.voiceInfo(voiceId)?.label || voiceId;
+        throw new Error(
+          `The ${label} voice could not be read — the download was damaged, ` +
+          `so it has been removed. Open Settings and download it again.`);
+      }
     });
     // What the next render queues behind is deliberately a promise that always
     // resolves. Chaining on `run` itself would hand a rejected promise to

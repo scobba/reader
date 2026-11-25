@@ -380,10 +380,11 @@ but it works. Settings › Show diagnostics reports which path was taken.
 ## Notes on the Piper integration
 
 `@diffusionstudio/vits-web` is published expecting a bundler, so
-`tools/vendor.ps1` applies six rewrites to it after download. Re-running the
-script reapplies them; the patches are idempotent, and the script says loudly
-if rewrite 5 no longer matches, because that one is a correctness fix rather
-than a packaging one.
+`tools/vendor.ps1` applies the six patches below after download. Re-running the
+script reapplies them; they are idempotent, and the script says loudly if
+patch 5 or 6 no longer matches, because those two are correctness fixes rather
+than packaging ones — losing them silently would reintroduce a crash and a
+dead end respectively.
 
 1. **`import("onnxruntime-web")`** — a bare specifier. Nothing resolves that in
    a browser without an import map or a bundler, so it is pointed at the
@@ -412,6 +413,26 @@ than a packaging one.
    reset. A session is stateless across `run()` calls, so one is now loaded per
    voice and kept. Loading it was also most of what made synthesis slow, so
    every sentence after the first is markedly faster.
+
+6. **A failed download was stored and then reported as a working voice.** Four
+   faults in one path, which together turn one bad download into a permanent
+   dead end. `fetchBlob` read the response body whatever the HTTP status, so a
+   404 or 502 from the host was written to OPFS as `<voice>.onnx`; it ignored
+   `Content-Length`, so a connection dropped part way through 63 MB stored half
+   a model; the OPFS write logged its own failures to the console and returned
+   as though they had worked, leaving a partial file behind while `download()`
+   resolved successfully; and `stored()` reported a voice as downloaded on the
+   strength of the filename alone. The reader then said *"On this device —
+   works offline"* and failed every synthesis with onnxruntime's
+   `Can't create a session. ERROR_CODE: 2, ERROR_MESSAGE: No graph was found in
+   the protobuf.` — an error naming neither the voice nor the download, and the
+   same every time, because nothing ever removed the file. Now a bad response
+   and a short one both throw, a failed write propagates and takes the partial
+   file with it, and a file too small to be a model is not reported as a voice.
+   The matching recovery is in `js/tts/`: `model-errors.js` decides whether an
+   error means the model itself cannot be read — narrowly, so that running out
+   of memory does not cost someone a 63 MB download — and the worker then
+   deletes the file and the engine asks for it again by name.
 
 Inference is also moved into `js/tts/piper-worker.js`. The package runs it
 inline despite a docstring claiming otherwise — there is no `Worker` anywhere

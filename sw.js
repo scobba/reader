@@ -10,7 +10,7 @@
  * Bump VERSION whenever any precached file changes; the old cache is dropped
  * on activate.
  */
-const VERSION = 'v1.1.6';
+const VERSION = 'v1.1.7';
 const CORE  = `reader-core-${VERSION}`;
 const HEAVY = 'reader-heavy';        // deliberately unversioned: assets are
                                      // immutable, keyed by their own filename
@@ -46,6 +46,7 @@ const CORE_ASSETS = [
   './js/tts/system.js',
   './js/tts/piper.js',
   './js/tts/piper-worker.js',
+  './js/tts/model-errors.js',
   './js/ui/library.js',
   './js/ui/reader.js',
   './js/ui/dialogs.js',
